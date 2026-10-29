@@ -12,9 +12,12 @@ import (
 )
 
 type app struct {
-	mu      sync.Mutex
-	cfg     Config
-	rawCfg  string
+	mu     sync.Mutex
+	cfg    Config
+	rawCfg string
+	// rawYAML is the plugin config block as the host sent it, kept so the console
+	// can drop its saved overrides and fall back to it without a restart.
+	rawYAML []byte
 	state   *stateStore
 	up      *upstream
 	stop    context.CancelFunc
@@ -92,6 +95,9 @@ func (a *app) configure(raw []byte) error {
 	if err != nil {
 		return err
 	}
+	// Console edits persist in <data_dir>/settings.json and outrank the file
+	// config, so a restart does not silently undo what the user just saved.
+	cfg = loadSavedSettings(cfg, a.log)
 	// The host reconfigures on every auth-directory change; skip the expensive
 	// work when nothing actually changed. The fingerprint covers every field so
 	// a proxy or limit edit is never silently ignored.
@@ -125,6 +131,7 @@ func (a *app) configure(raw []byte) error {
 	// Only remember the config once every side effect succeeded, so a failed
 	// configure is retried instead of being treated as a no-op.
 	a.rawCfg = fingerprint
+	a.rawYAML = append(a.rawYAML[:0], raw...)
 	a.closing.Store(false)
 	a.mu.Unlock()
 	if previousUp != nil {

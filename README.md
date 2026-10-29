@@ -142,7 +142,8 @@
 | POST | `/points/claim` | 领取每日登录积分（`{id}`） |
 | POST | `/points/task` | 领取单个新人任务（`{id, code}`） |
 | GET | `/logs` | 运行日志 |
-| GET / POST | `/settings` | 读取 / 保存运行参数 |
+| GET / POST | `/settings` | 读取 / 保存运行参数；保存的值写进 `plugin-data/magic2api/settings.json`，重启后仍生效 |
+| POST | `/settings/reset` | 清除已保存的设置，回退到 config.yaml 的值 |
 | POST | `/login/password` | 手机号密码登录（`{phone, password, state_code?, alias?}`） |
 | POST | `/login/captcha` | 取图形验证码（`{phone}` → `{token, image}`） |
 | POST | `/login/sms` | 校验图形验证码并发短信（`{phone, captcha_token, angle}`） |
@@ -231,7 +232,7 @@ CGO_ENABLED=0 go test ./...
 - **积分回填是按「模型 + 时间窗」认领**：流水里没有 request id，无法一对一绑定；同一模型高频并发时可能
   出现个别请求认领不到（记 0）或相邻请求互相认领（总额仍正确）。
 - **每日积分只在「个人组织」有意义**：上游 `login-gift` 对个人组织生效；团队组织返回未领取属正常。
-- **账号健康度不落盘**：冷却、失败次数在进程内，重启清零；`dead`/`disabled`/优先级会落盘。
+- **落盘与不落盘**：`accounts.json`（账号、令牌、密码、优先级、`dead`/`disabled`）、`models.json`、`settings.json`（控制台保存的运行参数）重启不丢；冷却、失败次数、令牌桶、积分缓存、请求与运行日志、`快过期` 分数只在内存，重启清零（分数由后台协程 20 秒后重建）。
 - **未实现 Responses / Anthropic 格式**：插件只声明 `chat-completions` 输入输出。
 - **控制台需要 CPA 的管理密钥**：数据接口由宿主鉴权，页面本身可以从
   `/v0/resource/plugins/magic2api/ui` 免密打开，但要在页面顶部填写一次

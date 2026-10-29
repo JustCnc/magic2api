@@ -1024,3 +1024,74 @@ func TestPoolOverridesHostPickForLapsingBalance(t *testing.T) {
 		t.Fatalf("chose %v, want the senior account", got)
 	}
 }
+
+func TestApplySettingsPatchIgnoresDeploymentKeys(t *testing.T) {
+	cfg, err := parseConfig([]byte("data_dir: " + t.TempDir()))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	patched, err := applySettingsPatch(cfg, map[string]any{
+		"rpm":                    float64(26),
+		"prefer_expiring_points": true,
+		"points_schedule_time":   "07:30",
+		"data_dir":               "/tmp/evil",
+		"base_url":               "https://evil.example",
+	})
+	if err != nil {
+		t.Fatalf("patch: %v", err)
+	}
+	if patched.RPM != 26 || !patched.PreferExpiringPoints || patched.PointsScheduleTime != "07:30" {
+		t.Fatalf("console keys not applied: %+v", patched)
+	}
+	if patched.DataDir != cfg.DataDir || patched.BaseURL != cfg.BaseURL {
+		t.Fatalf("deployment keys were rewritten: %s / %s", patched.DataDir, patched.BaseURL)
+	}
+}
+
+func TestSaveSettingsSurvivesRestartAndResetDropsIt(t *testing.T) {
+	dir := t.TempDir()
+	raw := []byte("data_dir: " + dir + "\nrpm: 30\nprefer_expiring_points: false\n")
+	a := &app{log: newLogRing(50)}
+	cfg, err := parseConfig(raw)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if cfg.PreferExpiringPoints {
+		t.Fatal("default should be off")
+	}
+	store, errStore := newStateStore(dir)
+	if errStore != nil {
+		t.Fatalf("state store: %v", errStore)
+	}
+	a.state = store
+	a.saveSettings(map[string]any{"prefer_expiring_points": true, "rpm": float64(26), "junk": "x"})
+	// A fresh start: the config file is unchanged, the saved edits win.
+	restarted, err := parseConfig(raw)
+	if err != nil {
+		t.Fatalf("reparse: %v", err)
+	}
+	restarted = loadSavedSettings(restarted, a.log)
+	if !restarted.PreferExpiringPoints || restarted.RPM != 26 {
+		t.Fatalf("saved settings were lost: prefer=%v rpm=%d", restarted.PreferExpiringPoints, restarted.RPM)
+	}
+	// Unknown keys never reach the file.
+	var saved map[string]any
+	if ok, _ := a.stateStore().readJSON(savedSettingsFile, &saved); !ok {
+		t.Fatal("settings.json missing")
+	}
+	if _, ok := saved["junk"]; ok {
+		t.Fatal("unlisted key was persisted")
+	}
+	// Reset drops the file and the config file rules again.
+	if err := a.stateStore().remove(savedSettingsFile); err != nil {
+		t.Fatalf("reset: %v", err)
+	}
+	fresh, err := parseConfig(raw)
+	if err != nil {
+		t.Fatalf("reparse after reset: %v", err)
+	}
+	afterReset := loadSavedSettings(fresh, a.log)
+	if afterReset.PreferExpiringPoints || afterReset.RPM != 30 {
+		t.Fatalf("reset did not fall back: prefer=%v rpm=%d", afterReset.PreferExpiringPoints, afterReset.RPM)
+	}
+}

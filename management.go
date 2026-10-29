@@ -33,6 +33,7 @@ func (a *app) managementRegistration() managementRegistration {
 		{http.MethodGet, "/logs", "运行日志"},
 		{http.MethodGet, "/settings", "读取配置"},
 		{http.MethodPost, "/settings", "保存配置"},
+		{http.MethodPost, "/settings/reset", "清除已保存的设置"},
 		{http.MethodPost, "/login/password", "手机号密码登录"},
 		{http.MethodPost, "/login/captcha", "获取图形验证码"},
 		{http.MethodPost, "/login/sms", "发送短信验证码"},
@@ -154,6 +155,8 @@ func (a *app) handleManagement(req managementRequest) managementResponse {
 		return okResponse(a.settingsView())
 	case method == http.MethodPost && path == "/settings":
 		return a.managementSaveSettings(req)
+	case method == http.MethodPost && path == "/settings/reset":
+		return a.managementResetSettings(req)
 	case method == http.MethodPost && path == "/login/password":
 		return a.managementLoginPassword(req)
 	case method == http.MethodPost && path == "/login/captcha":
@@ -328,45 +331,21 @@ func (a *app) managementSaveSettings(req managementRequest) managementResponse {
 	if err := json.Unmarshal(req.Body, &patch); err != nil {
 		return failResponse(http.StatusBadRequest, "请求体不是 JSON："+err.Error())
 	}
-	cfg := a.currentConfig()
-	if v, ok := patch["rpm"]; ok {
-		cfg.RPM = toInt(v, cfg.RPM)
-	}
-	if v, ok := patch["burst"]; ok {
-		cfg.Burst = toInt(v, cfg.Burst)
-	}
-	if v, ok := patch["cooldown_seconds"]; ok {
-		cfg.CooldownSeconds = toInt(v, cfg.CooldownSeconds)
-	}
-	if v, ok := patch["request_timeout_seconds"]; ok {
-		cfg.RequestTimeoutSeconds = toInt(v, cfg.RequestTimeoutSeconds)
-	}
-	if v, ok := patch["max_attempts"]; ok {
-		cfg.MaxAttempts = toInt(v, cfg.MaxAttempts)
-	}
-	if v, ok := patch["points_logging"]; ok {
-		cfg.PointsLogging = toBool(v, cfg.PointsLogging)
-	}
-	if v, ok := patch["prefer_expiring_points"]; ok {
-		cfg.PreferExpiringPoints = toBool(v, cfg.PreferExpiringPoints)
-	}
-	if v, ok := patch["daily_points_enabled"]; ok {
-		cfg.DailyPointsEnabled = toBool(v, cfg.DailyPointsEnabled)
-	}
-	if v, ok := patch["points_schedule_time"]; ok {
-		if s, isString := v.(string); isString && strings.TrimSpace(s) != "" {
-			cfg.PointsScheduleTime = s
-		}
-	}
-	if v, ok := patch["debug_dump"]; ok {
-		cfg.DebugDump = toBool(v, cfg.DebugDump)
-	}
-	if v, ok := patch["proxy_url"]; ok {
-		cfg.ProxyURL = strings.TrimSpace(fmt.Sprint(v))
-	}
-	if err := cfg.normalize(); err != nil {
+	cfg, err := applySettingsPatch(a.currentConfig(), patch)
+	if err != nil {
 		return failResponse(http.StatusBadRequest, err.Error())
 	}
+	// Console edits outlive the process: they land in <data_dir>/settings.json
+	// and win over the config file on the next start.
+	a.saveSettings(patch)
+	a.applyRuntimeConfig(cfg)
+	a.log.info("settings", "配置已更新")
+	return okResponse(a.settingsView())
+}
+
+// applyRuntimeConfig swaps in a new config and rebuilds everything derived from
+// it: the upstream client (when the proxy changed) and the rate buckets.
+func (a *app) applyRuntimeConfig(cfg Config) {
 	a.mu.Lock()
 	previous := a.cfg
 	a.cfg = cfg
@@ -385,7 +364,29 @@ func (a *app) managementSaveSettings(req managementRequest) managementResponse {
 		c.bucket = newTokenBucket(cfg.RPM, cfg.Burst)
 		c.mu.Unlock()
 	}
-	a.log.info("settings", "配置已更新")
+}
+
+// managementResetSettings drops the persisted console edits and falls back to the
+// config file the host handed over.
+func (a *app) managementResetSettings(managementRequest) managementResponse {
+	store := a.stateStore()
+	if store != nil {
+		if err := store.remove(savedSettingsFile); err != nil {
+			return failResponse(http.StatusInternalServerError, "删除 settings.json 失败："+err.Error())
+		}
+	}
+	a.mu.Lock()
+	raw := append([]byte(nil), a.rawYAML...)
+	a.mu.Unlock()
+	if len(raw) == 0 {
+		return failResponse(http.StatusConflict, "宿主尚未下发插件配置，无法恢复默认")
+	}
+	cfg, err := parseConfig(raw)
+	if err != nil {
+		return failResponse(http.StatusInternalServerError, "配置不合法："+err.Error())
+	}
+	a.applyRuntimeConfig(cfg)
+	a.log.info("settings", "已清除已保存的设置，回退到配置文件")
 	return okResponse(a.settingsView())
 }
 

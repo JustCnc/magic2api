@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -236,4 +237,122 @@ func ensureDir(path string) error {
 		return nil
 	}
 	return os.MkdirAll(path, 0o755)
+}
+
+// ---- console-owned settings ----
+
+// savedSettingsFile keeps the knobs the console can change. It lives next to
+// accounts.json and wins over the plugin config block on the next start: the
+// host owns config.yaml, the plugin owns this file.
+const savedSettingsFile = "settings.json"
+
+// persistableSettings lists the keys POST /settings accepts. Everything else in
+// the config block stays a deployment decision.
+var persistableSettings = map[string]bool{
+	"rpm":                     true,
+	"burst":                   true,
+	"cooldown_seconds":        true,
+	"request_timeout_seconds": true,
+	"max_attempts":            true,
+	"points_logging":          true,
+	"prefer_expiring_points":  true,
+	"daily_points_enabled":    true,
+	"points_schedule_time":    true,
+	"debug_dump":              true,
+	"proxy_url":               true,
+}
+
+// applySettingsPatch returns cfg with the console patch applied. Unknown keys are
+// ignored so an old console cannot break a newer plugin.
+func applySettingsPatch(cfg Config, patch map[string]any) (Config, error) {
+	if v, ok := patch["rpm"]; ok {
+		cfg.RPM = toInt(v, cfg.RPM)
+	}
+	if v, ok := patch["burst"]; ok {
+		cfg.Burst = toInt(v, cfg.Burst)
+	}
+	if v, ok := patch["cooldown_seconds"]; ok {
+		cfg.CooldownSeconds = toInt(v, cfg.CooldownSeconds)
+	}
+	if v, ok := patch["request_timeout_seconds"]; ok {
+		cfg.RequestTimeoutSeconds = toInt(v, cfg.RequestTimeoutSeconds)
+	}
+	if v, ok := patch["max_attempts"]; ok {
+		cfg.MaxAttempts = toInt(v, cfg.MaxAttempts)
+	}
+	if v, ok := patch["points_logging"]; ok {
+		cfg.PointsLogging = toBool(v, cfg.PointsLogging)
+	}
+	if v, ok := patch["prefer_expiring_points"]; ok {
+		cfg.PreferExpiringPoints = toBool(v, cfg.PreferExpiringPoints)
+	}
+	if v, ok := patch["daily_points_enabled"]; ok {
+		cfg.DailyPointsEnabled = toBool(v, cfg.DailyPointsEnabled)
+	}
+	if v, ok := patch["points_schedule_time"]; ok {
+		if s, isString := v.(string); isString && strings.TrimSpace(s) != "" {
+			cfg.PointsScheduleTime = s
+		}
+	}
+	if v, ok := patch["debug_dump"]; ok {
+		cfg.DebugDump = toBool(v, cfg.DebugDump)
+	}
+	if v, ok := patch["proxy_url"]; ok {
+		cfg.ProxyURL = strings.TrimSpace(fmt.Sprint(v))
+	}
+	if err := cfg.normalize(); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+// loadSavedSettings applies the persisted console edits on top of the config
+// file. A broken or missing file is not fatal: the file config is used as is.
+func loadSavedSettings(cfg Config, log *logRing) Config {
+	raw, err := os.ReadFile(filepath.Join(cfg.DataDir, savedSettingsFile))
+	if err != nil {
+		return cfg
+	}
+	var patch map[string]any
+	if err := json.Unmarshal(raw, &patch); err != nil {
+		if log != nil {
+			log.warn("settings", "settings.json 解析失败，忽略已保存设置："+err.Error())
+		}
+		return cfg
+	}
+	merged, err := applySettingsPatch(cfg, patch)
+	if err != nil {
+		if log != nil {
+			log.warn("settings", "已保存设置不合法，忽略："+err.Error())
+		}
+		return cfg
+	}
+	return merged
+}
+
+// saveSettings merges the console patch into settings.json. Only whitelisted
+// keys are written so a stray field cannot pin a deployment value.
+func (a *app) saveSettings(patch map[string]any) {
+	store := a.stateStore()
+	if store == nil {
+		return
+	}
+	var saved map[string]any
+	if ok, err := store.readJSON(savedSettingsFile, &saved); err != nil || !ok || saved == nil {
+		saved = make(map[string]any)
+	}
+	changed := false
+	for key, value := range patch {
+		if !persistableSettings[key] {
+			continue
+		}
+		saved[key] = value
+		changed = true
+	}
+	if !changed {
+		return
+	}
+	if err := store.writeJSON(savedSettingsFile, saved); err != nil {
+		a.log.warn("settings", "写入 settings.json 失败："+err.Error())
+	}
 }
