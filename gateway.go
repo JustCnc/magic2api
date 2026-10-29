@@ -152,7 +152,11 @@ func (u *upstream) openChat(ctx context.Context, apiKey string, body []byte, str
 		req.Header.Set(k, v)
 	}
 	req.Header.Set("User-Agent", defaultUserAgent)
-	resp, err := u.client.Do(req)
+	client := u.client
+	if stream {
+		client = u.stream
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, &failure{Status: http.StatusBadGateway, Message: "POST /v1/chat/completions: " + err.Error(), Retryable: true}
 	}

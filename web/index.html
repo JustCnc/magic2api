@@ -353,6 +353,7 @@ async function loadAccounts() {
       <td>
         <button class="act ghost" data-act="refresh" data-id="${esc(a.id)}">续期</button>
         <button class="act ghost" data-act="toggle" data-id="${esc(a.id)}" data-disabled="${a.disabled}">${a.disabled ? "启用" : "禁用"}</button>
+        ${a.dead ? `<button class="act ghost" data-act="revive" data-id="${esc(a.id)}">复活</button>` : ""}
         <button class="act ghost" data-act="delete" data-id="${esc(a.id)}">删除</button>
       </td></tr>`;
   }).join("");
@@ -371,6 +372,9 @@ document.getElementById("accounts-body").addEventListener("click", async event =
       const disabled = button.dataset.disabled === "true";
       await api("/accounts/update", { method: "POST", body: JSON.stringify({ id, disabled: !disabled }) });
       toast(disabled ? "已启用" : "已禁用", "ok");
+    } else if (button.dataset.act === "revive") {
+      await api("/accounts/update", { method: "POST", body: JSON.stringify({ id, dead: false }) });
+      toast("已复活", "ok");
     } else if (button.dataset.act === "delete") {
       if (!confirm("确认删除账号 " + id + "？")) return;
       await api("/accounts/delete", { method: "POST", body: JSON.stringify({ id }) });

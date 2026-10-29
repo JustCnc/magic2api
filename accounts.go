@@ -39,7 +39,9 @@ type credential struct {
 	UpdatedAt int64 `json:"updated_at,omitempty"`
 
 	// runtime only
-	mu            sync.Mutex `json:"-"`
+	mu sync.Mutex `json:"-"`
+	// claimMu serialises daily-points claims without blocking console reads.
+	claimMu       sync.Mutex `json:"-"`
 	cooldownUntil time.Time  `json:"-"`
 	lastSuccess   time.Time  `json:"-"`
 	failures      int        `json:"-"`

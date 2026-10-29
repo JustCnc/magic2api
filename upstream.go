@@ -53,6 +53,9 @@ func asFailure(err error) *failure {
 type upstream struct {
 	cfg    Config
 	client *http.Client
+	// stream has no whole-request timeout: a long answer must not be cut in the
+	// middle. Liveness comes from the idle watchdog in executor.go.
+	stream *http.Client
 }
 
 func newUpstream(cfg Config) *upstream {
@@ -71,13 +74,20 @@ func newUpstream(cfg Config) *upstream {
 			transport.Proxy = http.ProxyURL(proxy)
 		}
 	}
-	return &upstream{cfg: cfg, client: &http.Client{
-		Transport: transport,
-		Timeout:   time.Duration(cfg.requestTimeout()) * time.Second,
-		// Redirects are never expected on these endpoints; following them would
-		// turn a WAF challenge into a confusing success.
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}}
+	checkRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &upstream{
+		cfg: cfg,
+		client: &http.Client{
+			Transport:     transport,
+			Timeout:       time.Duration(cfg.requestTimeout()) * time.Second,
+			CheckRedirect: checkRedirect,
+		},
+		// No whole-request timeout: a long stream must not be cut mid-answer.
+		stream: &http.Client{
+			Transport:     transport,
+			CheckRedirect: checkRedirect,
+		},
+	}
 }
 
 func (u *upstream) close() {
@@ -186,9 +196,16 @@ func (u *upstream) unwrapAsset(status int, header http.Header, payload []byte, l
 		// Bad credentials or bad verification code: the caller sent something
 		// wrong, so do not report it as an upstream outage.
 		f.Status = http.StatusBadRequest
-	case 3103, 2179, 2155, 3102, 3109:
+	case 3103, 2179, 3102:
 		f.Status = http.StatusUnauthorized
 		f.Auth = true
+		f.Message = fmt.Sprintf("%s: code=%d %s", label, code, msg)
+	case 2155, 3109:
+		// 2155 用户不存在 / 3109 账号已禁用: the credential will never work again,
+		// so stop burning attempts on it instead of cooling it.
+		f.Status = http.StatusForbidden
+		f.Auth = true
+		f.Dead = true
 		f.Message = fmt.Sprintf("%s: code=%d %s", label, code, msg)
 	case 9307:
 		f.Status = http.StatusTooManyRequests

@@ -365,3 +365,18 @@ func TestParseConfigDefaults(t *testing.T) {
 		t.Fatalf("override: %+v", cfg)
 	}
 }
+
+func TestNewUpstreamHasBothClients(t *testing.T) {
+	// The streaming client has no whole-request timeout; a nil one panics the
+	// host process on the first streaming call.
+	u := newUpstream(Config{BaseURL: defaultBaseURL, RequestTimeoutSeconds: 30})
+	if u.client == nil || u.stream == nil {
+		t.Fatalf("clients not initialised: %#v", u)
+	}
+	if u.client.Timeout == 0 {
+		t.Fatal("non-streaming client must keep the request timeout")
+	}
+	if u.stream.Timeout != 0 {
+		t.Fatal("streaming client must not cap the whole request")
+	}
+}

@@ -302,8 +302,10 @@ func (a *app) dailyPointsLoop(ctx context.Context) {
 // claimDaily returns true when everything claimable today has been claimed, so
 // the caller can stop retrying until tomorrow.
 func (a *app) claimDaily(ctx context.Context, account *credential, today string) bool {
-	account.mu.Lock()
-	defer account.mu.Unlock()
+	// One claim per account at a time; the lock is separate from the account
+	// mutex so console reads never wait on a network call.
+	account.claimMu.Lock()
+	defer account.claimMu.Unlock()
 	claimCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
 
