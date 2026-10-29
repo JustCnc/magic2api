@@ -23,8 +23,14 @@ type credential struct {
 	Device           deviceInfo `json:"device"`
 
 	// JWTExpiresAt is read from the JWT exp claim at load/login time. It never
-	// changes while the account lives: the login token cannot be refreshed.
-	JWTExpiresAt          int64  `json:"jwt_expires_at,omitempty"`
+	// changes while the account lives: the login token cannot be refreshed, only
+	// re-issued by signing in again.
+	JWTExpiresAt int64 `json:"jwt_expires_at,omitempty"`
+	// Password is opt-in: only stored when the user asked for automatic
+	// re-login, because the 30-day login token can only be renewed by signing in
+	// again. Plain text, like the tokens next to it.
+	Password              string `json:"password,omitempty"`
+	AutoRelogin           bool   `json:"auto_relogin,omitempty"`
 	APIKey                string `json:"api_key,omitempty"`
 	RefreshToken          string `json:"refresh_token,omitempty"`
 	APIKeyExpiresAt       int64  `json:"api_key_expires_at,omitempty"`
@@ -45,6 +51,9 @@ type credential struct {
 	mu sync.Mutex `json:"-"`
 	// claimMu serialises daily-points claims without blocking console reads.
 	claimMu       sync.Mutex `json:"-"`
+	reloginMu     sync.Mutex `json:"-"`
+	reloginAt     time.Time  `json:"-"`
+	reloginFails  int        `json:"-"`
 	cooldownUntil time.Time  `json:"-"`
 	lastSuccess   time.Time  `json:"-"`
 	failures      int        `json:"-"`
@@ -124,6 +133,8 @@ type accountInput struct {
 	Note             string     `json:"note,omitempty"`
 	APIKey           string     `json:"api_key,omitempty"`
 	RefreshToken     string     `json:"refresh_token,omitempty"`
+	Password         string     `json:"password,omitempty"`
+	AutoRelogin      bool       `json:"auto_relogin,omitempty"`
 }
 
 // credentialFromConfig builds the primary account, if configured.
@@ -178,6 +189,8 @@ func accountFromInput(in accountInput, alias string) *credential {
 		Note:             in.Note,
 		APIKey:           strings.TrimSpace(in.APIKey),
 		RefreshToken:     strings.TrimSpace(in.RefreshToken),
+		Password:         in.Password,
+		AutoRelogin:      in.AutoRelogin && in.Password != "",
 		Source:           "import",
 		UpdatedAt:        time.Now().UnixMilli(),
 	}

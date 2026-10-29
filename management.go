@@ -207,11 +207,13 @@ type accountView struct {
 	Source           string `json:"source"`
 	Nickname         string `json:"nickname,omitempty"`
 	Phone            string `json:"phone,omitempty"`
+	PhoneDisplay     string `json:"phone_display,omitempty"`
 	UserID           string `json:"user_id,omitempty"`
 	DeviceName       string `json:"device_name"`
 	DeviceID         string `json:"device_id"`
 	OS               string `json:"os"`
 	APIKeyValid      bool   `json:"api_key_valid"`
+	AutoRelogin      bool   `json:"auto_relogin"`
 	JWTExpiresAt     int64  `json:"jwt_expires_at"`
 	JWTExpired       bool   `json:"jwt_expired"`
 	APIKeyExpiresAt  int64  `json:"api_key_expires_at"`
@@ -238,11 +240,13 @@ func (a *app) listAccounts() []accountView {
 			Source:           c.Source,
 			Nickname:         c.Nickname,
 			Phone:            c.Phone,
+			PhoneDisplay:     maskPhone(c.Phone),
 			UserID:           c.UserID,
 			DeviceName:       c.Device.Name,
 			DeviceID:         c.Device.ID,
 			OS:               strings.TrimSpace(c.Device.OS + " " + c.Device.OSVersion),
 			APIKeyValid:      c.apiKeyValidLocked(0),
+			AutoRelogin:      c.AutoRelogin && c.Password != "",
 			JWTExpiresAt:     c.JWTExpiresAt,
 			JWTExpired:       c.jwtDeadLocked(time.Now()),
 			APIKeyExpiresAt:  c.APIKeyExpiresAt,
@@ -457,6 +461,8 @@ type accountExport struct {
 	Device           deviceInfo `json:"device"`
 	APIKey           string     `json:"api_key,omitempty"`
 	RefreshToken     string     `json:"refresh_token,omitempty"`
+	Password         string     `json:"password,omitempty"`
+	AutoRelogin      bool       `json:"auto_relogin,omitempty"`
 	APIKeyExpiresAt  int64      `json:"api_key_expires_at,omitempty"`
 	RefreshExpiresAt int64      `json:"refresh_token_expires_at,omitempty"`
 	Priority         int        `json:"priority"`
@@ -483,6 +489,8 @@ func exportRecord(c *credential) accountExport {
 		Device:           c.Device,
 		APIKey:           c.APIKey,
 		RefreshToken:     c.RefreshToken,
+		Password:         c.Password,
+		AutoRelogin:      c.AutoRelogin,
 		APIKeyExpiresAt:  c.APIKeyExpiresAt,
 		RefreshExpiresAt: c.RefreshTokenExpiresAt,
 		Priority:         c.Priority,
@@ -560,11 +568,13 @@ func (a *app) managementDeleteAccount(req managementRequest) managementResponse 
 
 func (a *app) managementUpdateAccount(req managementRequest) managementResponse {
 	var patch struct {
-		ID       string  `json:"id"`
-		Priority *int    `json:"priority"`
-		Disabled *bool   `json:"disabled"`
-		Dead     *bool   `json:"dead"`
-		Note     *string `json:"note"`
+		ID          string  `json:"id"`
+		Priority    *int    `json:"priority"`
+		Disabled    *bool   `json:"disabled"`
+		Dead        *bool   `json:"dead"`
+		Note        *string `json:"note"`
+		Password    *string `json:"password"`
+		AutoRelogin *bool   `json:"auto_relogin"`
 	}
 	if err := json.Unmarshal(req.Body, &patch); err != nil {
 		return failResponse(http.StatusBadRequest, "请求体不是 JSON："+err.Error())
@@ -590,6 +600,16 @@ func (a *app) managementUpdateAccount(req managementRequest) managementResponse 
 	}
 	if patch.Note != nil {
 		account.Note = *patch.Note
+	}
+	if patch.Password != nil {
+		account.Password = *patch.Password
+	}
+	if patch.AutoRelogin != nil {
+		account.AutoRelogin = *patch.AutoRelogin
+		// Turning it off must drop the stored secret, not just the flag.
+		if !*patch.AutoRelogin {
+			account.Password = ""
+		}
 	}
 	account.UpdatedAt = time.Now().UnixMilli()
 	account.mu.Unlock()
@@ -713,6 +733,9 @@ func (a *app) managementLoginPassword(req managementRequest) managementResponse 
 		StateCode string `json:"state_code"`
 		Alias     string `json:"alias"`
 		State     string `json:"state"`
+		// Remember keeps the password so the 30-day login token can be renewed
+		// without a human. Opt-in: without it nothing is stored.
+		Remember bool `json:"remember"`
 	}
 	if err := json.Unmarshal(req.Body, &body); err != nil {
 		return failResponse(http.StatusBadRequest, "请求体不是 JSON："+err.Error())
@@ -739,6 +762,14 @@ func (a *app) managementLoginPassword(req managementRequest) managementResponse 
 	account, err := a.adoptLogin(ctx, token, alias, strings.TrimSpace(body.Phone))
 	if err != nil {
 		return failResponse(http.StatusBadGateway, asFailure(err).Message)
+	}
+	if body.Remember {
+		account.mu.Lock()
+		account.Password = body.Password
+		account.AutoRelogin = true
+		account.mu.Unlock()
+		a.persistAccounts()
+		a.log.info("login", "账号 "+account.label()+" 已开启到期自动重登（保存了密码）")
 	}
 	a.completeLoginSession(strings.TrimSpace(body.State), account)
 	return okResponse(a.accountView(account))
@@ -946,4 +977,17 @@ func (a *app) managementTestChat(req managementRequest) managementResponse {
 		view["account"] = account.label()
 	}
 	return okResponse(view)
+}
+
+// maskPhone keeps the console readable: a real number is masked, an already
+// masked one (from upstream) is passed through unchanged.
+func maskPhone(phone string) string {
+	phone = strings.TrimSpace(phone)
+	if !isRealPhone(phone) {
+		return phone
+	}
+	if len(phone) <= 7 {
+		return phone[:1] + "****" + phone[len(phone)-2:]
+	}
+	return phone[:3] + "****" + phone[len(phone)-4:]
 }

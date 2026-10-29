@@ -62,6 +62,8 @@
   .keybar input { max-width: 320px; }
   .muted { color: var(--muted); }
   .flex { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  label.inline { display: inline-flex; gap: 6px; align-items: center; color: var(--text); font-size: 13px; }
+  label.inline input[type=checkbox] { width: auto; margin: 0; }
   .spacer { flex: 1; }
 </style>
 </head>
@@ -99,8 +101,9 @@
         账号/资产接口用 <code>authorization + organization-code</code>。
         模型对外暴露为 <code id="prefix-hint">magic/&lt;模型 id&gt;</code>。
         每个账号独立 device_id；api-key 2 小时自动续期（refresh_token 7 天）。
-        <b>JWT（登录令牌）有效期 30 天且上游没有刷新接口</b>，到期前要在「账号」页点 <b>重登</b>
-        （或用密码/短信重新登录，会自动续到原账号上）；过期后只剩 api-key 自身 2 小时的余量可用。
+        <b>JWT（登录令牌）有效期 30 天且上游没有刷新接口</b>。两条路：到期前手动点「重登」；
+        或者登录时勾 <b>记住密码</b>，插件会在到期前 48 小时自动用密码重新登录，账号不会掉线
+        （密码明文存在插件数据目录，跟 token 同级，「关自动」会立刻删掉它）。
       </div>
     </div>
   </section>
@@ -111,6 +114,8 @@
       <div class="row">
         <label><span>手机号</span><input id="login-phone" placeholder="13800000000" /></label>
         <label><span>密码（手机号+密码登录，无需验证码）</span><input id="login-password" type="password" placeholder="密码" /></label>
+        <label style="flex:0 0 auto"><span>到期自动重登</span>
+          <label class="inline"><input type="checkbox" id="login-remember" /> 记住密码</label></label>
         <button class="act" id="btn-login-password">密码登录</button>
       </div>
       <div class="row" style="margin-top:12px">
@@ -429,18 +434,19 @@ async function loadAccounts() {
     const jwt = fmtJwt(a);
     return `<tr>
       <td>${esc(a.alias)}<div class="muted" style="font-size:11px">${esc(a.source)}</div></td>
-      <td>${esc(a.nickname || "-")}<div class="muted" style="font-size:11px">${esc(a.phone || a.user_id || "")}</div></td>
+      <td>${esc(a.nickname || "-")}<div class="muted" style="font-size:11px">${esc(a.phone_display || a.phone || a.user_id || "")}</div></td>
       <td>${esc(a.organization_code)}</td>
       <td>${esc(a.device_name)}<div class="muted" style="font-size:11px">${esc(a.device_id.slice(0, 16))}…</div></td>
       <td>${a.priority}</td>
       <td>${key}<div class="muted" style="font-size:11px">${fmtTime(a.api_key_expires_at)}</div></td>
-      <td>${jwt.pill}<div class="muted" style="font-size:11px">${jwt.when}</div></td>
+      <td>${jwt.pill}${a.auto_relogin ? ' <span class="pill ok">自动</span>' : ""}<div class="muted" style="font-size:11px">${jwt.when}</div></td>
       <td>${status}${a.last_error ? `<div class="muted" style="font-size:11px">${esc(a.last_error.slice(0, 60))}</div>` : ""}</td>
       <td>
         <button class="act ghost" data-act="refresh" data-id="${esc(a.id)}">续期</button>
         <button class="act ghost" data-act="toggle" data-id="${esc(a.id)}" data-disabled="${a.disabled}">${a.disabled ? "启用" : "禁用"}</button>
         ${a.dead ? `<button class="act ghost" data-act="revive" data-id="${esc(a.id)}">复活</button>` : ""}
         <button class="act ghost" data-act="relogin" data-id="${esc(a.id)}">重登</button>
+        ${a.auto_relogin ? `<button class="act ghost" data-act="no-auto" data-id="${esc(a.id)}">关自动</button>` : ""}
         <button class="act ghost" data-act="export" data-id="${esc(a.id)}">导出</button>
         <button class="act ghost" data-act="delete" data-id="${esc(a.id)}">删除</button>
       </td></tr>`;
@@ -500,13 +506,20 @@ document.getElementById("accounts-body").addEventListener("click", async event =
       toast("已复活", "ok");
     } else if (button.dataset.act === "relogin") {
       const account = state.accounts.find(a => a.id === id);
-      const phone = (account && account.phone) || prompt("手机号");
+      const phone = (account && /^[0-9]{6,20}$/.test(account.phone || "")) ? account.phone : prompt("手机号");
       if (!phone) return;
       const password = prompt("账号 " + id + " 的登录密码（用于续期 " + (account && account.phone ? phone : "该账号") + "）");
       if (!password) return;
       button.disabled = true;
-      await api("/login/password", { method: "POST", body: JSON.stringify({ phone, password, alias: id }) });
-      toast("已重新登录并续期", "ok");
+      const remember = confirm("记住这个密码，到期自动重登？\n（密码以明文存在插件数据目录，跟 token 同级）");
+      await api("/login/password", { method: "POST", body: JSON.stringify({ phone, password, alias: id, remember }) });
+      toast(remember ? "已重新登录，并开启到期自动重登" : "已重新登录并续期", "ok");
+      await loadAccounts();
+      return;
+    } else if (button.dataset.act === "no-auto") {
+      if (!confirm("关闭自动重登会立刻删除已保存的密码，继续？")) return;
+      await api("/accounts/update", { method: "POST", body: JSON.stringify({ id, auto_relogin: false }) });
+      toast("已关闭自动重登，保存的密码已删除", "ok");
       await loadAccounts();
       return;
     } else if (button.dataset.act === "export") {
@@ -528,7 +541,8 @@ document.getElementById("btn-login-password").addEventListener("click", async ev
   if (!phone || !password) { toast("请填写手机号与密码", "err"); return; }
   event.target.disabled = true;
   try {
-    const account = await api("/login/password", { method: "POST", body: JSON.stringify({ phone, password, state: state.loginState }) });
+    const remember = document.getElementById("login-remember").checked;
+    const account = await api("/login/password", { method: "POST", body: JSON.stringify({ phone, password, remember, state: state.loginState }) });
     toast("登录成功：" + account.alias, "ok");
     await loadAccounts();
   } catch (err) { /* shown */ } finally { event.target.disabled = false; }

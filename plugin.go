@@ -252,6 +252,7 @@ func (a *app) maintainOnce(ctx context.Context) {
 	cfg := a.currentConfig()
 	a.scanAccountsDir(cfg)
 	a.refreshStaleAccounts(ctx)
+	a.autoRelogin(ctx)
 	a.ensureHostRecords()
 	a.refreshMissingProfiles()
 

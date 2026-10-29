@@ -329,11 +329,27 @@ func (a *app) adoptLogin(ctx context.Context, authorization, alias, phone string
 		UpdatedAt:        time.Now().UnixMilli(),
 	}
 	if existing := a.pool.get(account.ID); existing != nil {
+		existing.mu.Lock()
+		// A re-login renews the login token, so everything the user configured on
+		// the account has to survive the swap.
 		account.APIKey = existing.APIKey
 		account.RefreshToken = existing.RefreshToken
 		account.APIKeyExpiresAt = existing.APIKeyExpiresAt
 		account.RefreshTokenExpiresAt = existing.RefreshTokenExpiresAt
 		account.Device = existing.Device
+		account.Priority = existing.Priority
+		account.Note = existing.Note
+		account.Disabled = existing.Disabled
+		account.Nickname = existing.Nickname
+		account.UserID = existing.UserID
+		if account.Phone == "" {
+			account.Phone = existing.Phone
+		}
+		if account.Password == "" {
+			account.Password = existing.Password
+			account.AutoRelogin = existing.AutoRelogin
+		}
+		existing.mu.Unlock()
 	}
 	account.bucket = newTokenBucket(a.currentConfig().RPM, a.currentConfig().Burst)
 	a.pool.put(account)
@@ -387,9 +403,122 @@ func (a *app) refreshAccountInfo(account *credential) {
 	} else if info.RealName != "" {
 		account.Nickname = info.RealName
 	}
-	if info.Phone != "" {
+	// Upstream reports a masked phone (138****8000). Never let that overwrite a
+	// real number: automatic re-login needs the one you can type.
+	if info.Phone != "" && !isRealPhone(account.Phone) {
 		account.Phone = info.Phone
 	}
 	account.mu.Unlock()
 	a.persistAccounts()
+}
+
+// The login token cannot be refreshed upstream, so the only automatic renewal
+// is signing in again. Accounts that opted in (see AutoRelogin) keep their
+// password for exactly this purpose.
+const (
+	// reloginLead starts trying this long before the token dies, so the account
+	// never actually goes dark when the password still works.
+	reloginLead = 48 * time.Hour
+	// reloginInterval throttles retries per account.
+	reloginInterval = 6 * time.Hour
+	// reloginMaxFails stops the loop from hammering a bad password: after this
+	// many consecutive failures it only retries once a day.
+	reloginMaxFails = 3
+)
+
+// reloginDue decides whether an account should be signed in again right now.
+func reloginDue(c *credential, now time.Time) (phone, password string, due bool) {
+	if c == nil {
+		return "", "", false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	phone = strings.TrimSpace(c.Phone)
+	password = c.Password
+	switch {
+	case !c.AutoRelogin || password == "" || !isRealPhone(phone):
+		return "", "", false
+	case c.Disabled || c.Dead:
+		return "", "", false
+	case c.JWTExpiresAt <= 0:
+		// No local opinion on the deadline: never guess.
+		return "", "", false
+	case now.Before(time.UnixMilli(c.JWTExpiresAt).Add(-reloginLead)):
+		return "", "", false
+	}
+	interval := reloginInterval
+	if c.reloginFails >= reloginMaxFails {
+		interval = 24 * time.Hour
+	}
+	if !c.reloginAt.IsZero() && now.Sub(c.reloginAt) < interval {
+		return "", "", false
+	}
+	return phone, password, true
+}
+
+// autoRelogin renews expiring login tokens for accounts that stored a password.
+func (a *app) autoRelogin(ctx context.Context) {
+	now := time.Now()
+	for _, account := range a.pool.snapshot() {
+		phone, password, due := reloginDue(account, now)
+		if !due {
+			continue
+		}
+		a.reloginAccount(ctx, account, phone, password, account.Alias)
+	}
+}
+
+// reloginAccount signs in again with the stored password and swaps the account
+// in place. Returns true when the login token was renewed.
+func (a *app) reloginAccount(ctx context.Context, account *credential, phone, password, alias string) bool {
+	account.mu.Lock()
+	account.reloginAt = time.Now()
+	account.mu.Unlock()
+
+	loginCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	device := newDevice("relogin:" + phone)
+	token, err := a.callLogin(loginCtx, loginPayload{Phone: phone, Password: password, Type: "phone_password"}, device)
+	if err != nil {
+		account.mu.Lock()
+		account.reloginFails++
+		fails := account.reloginFails
+		account.mu.Unlock()
+		message := fmt.Sprintf("账号 %s 自动重登失败（连续 %d 次）：%s", alias, fails, asFailure(err).Message)
+		if fails >= reloginMaxFails {
+			message += "；已暂停自动重登，请手动重登或检查密码"
+		}
+		a.log.warn("login", message)
+		return false
+	}
+	renewed, err := a.adoptLogin(loginCtx, token, alias, phone)
+	if err != nil {
+		account.mu.Lock()
+		account.reloginFails++
+		account.mu.Unlock()
+		a.log.warn("login", fmt.Sprintf("账号 %s 自动重登后写入失败：%s", alias, asFailure(err).Message))
+		return false
+	}
+	renewed.mu.Lock()
+	renewed.reloginFails = 0
+	until := renewed.JWTExpiresAt
+	renewed.mu.Unlock()
+	a.persistAccounts()
+	a.log.info("login", fmt.Sprintf("账号 %s 登录令牌已自动续期，有效期至 %s",
+		alias, time.UnixMilli(until).In(serverZone).Format("2006-01-02 15:04")))
+	return true
+}
+
+// isRealPhone tells a dialable number from the masked one upstream reports.
+func isRealPhone(phone string) bool {
+	phone = strings.TrimSpace(phone)
+	if len(phone) < 6 || len(phone) > 20 {
+		return false
+	}
+	for _, r := range phone {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }

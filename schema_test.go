@@ -622,3 +622,151 @@ func TestEnsureAPIKeyReportsExpiredLogin(t *testing.T) {
 		t.Fatal("an expired login token should not mark the account dead")
 	}
 }
+
+func TestReloginDue(t *testing.T) {
+	now := time.Now()
+	in72h := now.Add(72 * time.Hour).UnixMilli()
+	in10h := now.Add(10 * time.Hour).UnixMilli()
+	past := now.Add(-time.Hour).UnixMilli()
+
+	base := func() *credential {
+		return &credential{ID: "a", Alias: "a", Phone: "13800000000", Password: "pw", AutoRelogin: true,
+			Authorization: "t", OrganizationCode: "o", JWTExpiresAt: in10h}
+	}
+
+	// Inside the lead window: sign in again.
+	if _, _, due := reloginDue(base(), now); !due {
+		t.Fatal("expiring token was not scheduled for re-login")
+	}
+	// Far from expiry: leave it alone.
+	far := base()
+	far.JWTExpiresAt = in72h
+	if _, _, due := reloginDue(far, now); due {
+		t.Fatal("token with 3 days left was re-logged too early")
+	}
+	// Opt-in only.
+	off := base()
+	off.AutoRelogin = false
+	if _, _, due := reloginDue(off, now); due {
+		t.Fatal("re-login ran without opt-in")
+	}
+	noPassword := base()
+	noPassword.Password = ""
+	if _, _, due := reloginDue(noPassword, now); due {
+		t.Fatal("re-login ran without a stored password")
+	}
+	noPhone := base()
+	noPhone.Phone = ""
+	if _, _, due := reloginDue(noPhone, now); due {
+		t.Fatal("re-login ran without a phone number")
+	}
+	// Disabled / dead accounts are the operator's decision.
+	disabled := base()
+	disabled.Disabled = true
+	if _, _, due := reloginDue(disabled, now); due {
+		t.Fatal("re-login ran for a disabled account")
+	}
+	// Throttle, then the slower retry after repeated failures.
+	recent := base()
+	recent.reloginAt = now.Add(-time.Hour)
+	if _, _, due := reloginDue(recent, now); due {
+		t.Fatal("re-login ignored the throttle")
+	}
+	recent.reloginAt = now.Add(-7 * time.Hour)
+	if _, _, due := reloginDue(recent, now); !due {
+		t.Fatal("re-login did not retry after the throttle window")
+	}
+	backoff := base()
+	backoff.reloginFails = reloginMaxFails
+	backoff.reloginAt = now.Add(-7 * time.Hour)
+	if _, _, due := reloginDue(backoff, now); due {
+		t.Fatal("a failing password kept retrying every 6h")
+	}
+	backoff.reloginAt = now.Add(-25 * time.Hour)
+	if _, _, due := reloginDue(backoff, now); !due {
+		t.Fatal("a failing password never retried again")
+	}
+	// Unknown deadline is never guessed.
+	unknown := base()
+	unknown.JWTExpiresAt = 0
+	if _, _, due := reloginDue(unknown, now); due {
+		t.Fatal("re-login ran without a known deadline")
+	}
+	_ = past
+}
+
+func TestUpdateAccountClearsStoredPassword(t *testing.T) {
+	a := newTestApp()
+	a.pool.put(&credential{ID: "acc", Alias: "acc", Authorization: "t", OrganizationCode: "o",
+		Phone: "13800000000", Password: "pw", AutoRelogin: true})
+
+	off := `{"id":"acc","auto_relogin":false}`
+	if resp := a.handleManagement(managementRequest{Method: "POST", Path: "/accounts/update", Body: []byte(off)}); resp.StatusCode != 200 {
+		t.Fatalf("update failed: %s", resp.Body)
+	}
+	account := a.pool.get("acc")
+	account.mu.Lock()
+	password, auto := account.Password, account.AutoRelogin
+	account.mu.Unlock()
+	if password != "" || auto {
+		t.Fatalf("password survived the switch-off: %q %v", password, auto)
+	}
+
+	on := `{"id":"acc","password":"pw2","auto_relogin":true}`
+	if resp := a.handleManagement(managementRequest{Method: "POST", Path: "/accounts/update", Body: []byte(on)}); resp.StatusCode != 200 {
+		t.Fatalf("update failed: %s", resp.Body)
+	}
+	account.mu.Lock()
+	password, auto = account.Password, account.AutoRelogin
+	account.mu.Unlock()
+	if password != "pw2" || !auto {
+		t.Fatalf("opt-in not stored: %q %v", password, auto)
+	}
+}
+
+// newTestApp builds the smallest app the management layer can run against:
+// no host callbacks, in-memory state only.
+func newTestApp() *app {
+	a := &app{
+		pool:      newPool(),
+		log:       newLogRing(50),
+		published: map[string]string{},
+		requests:  newRequestLog(20),
+	}
+	a.accounts = newAccountManager(a)
+	return a
+}
+
+func TestIsRealPhoneAndMask(t *testing.T) {
+	for _, phone := range []string{"13800000000", "8613800000000"} {
+		if !isRealPhone(phone) {
+			t.Fatalf("%q should count as a dialable number", phone)
+		}
+	}
+	for _, phone := range []string{"", "156****2610", "138 0000 0000", "abc"} {
+		if isRealPhone(phone) {
+			t.Fatalf("%q should not count as a dialable number", phone)
+		}
+	}
+	if got := maskPhone("13800000000"); got != "138****0000" {
+		t.Fatalf("maskPhone = %q", got)
+	}
+	// Already-masked input is passed through, so repeated updates do not mangle it.
+	if got := maskPhone("156****2610"); got != "156****2610" {
+		t.Fatalf("maskPhone masked twice: %q", got)
+	}
+}
+
+func TestReloginSkipsMaskedPhone(t *testing.T) {
+	now := time.Now()
+	account := &credential{ID: "a", Alias: "a", Authorization: "t", OrganizationCode: "o",
+		Phone: "156****2610", Password: "pw", AutoRelogin: true,
+		JWTExpiresAt: now.Add(time.Hour).UnixMilli()}
+	if _, _, due := reloginDue(account, now); due {
+		t.Fatal("a masked phone cannot be used to sign in")
+	}
+	account.Phone = "15600002610"
+	if _, _, due := reloginDue(account, now); !due {
+		t.Fatal("a real phone should allow re-login")
+	}
+}

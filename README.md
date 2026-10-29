@@ -99,6 +99,9 @@
   `401 账号 xxx 的登录令牌已于 YYYY-MM-DD HH:MM 过期，请重新登录`，不再空转冷却
 - 点行内 **重登** 输入密码即可（走 `POST /login/password`，用同一 alias 回填到原账号，
   api-key 立刻重新铸造）；也可以用上面的短信登录
+- **自动重登（可选）**：登录时勾「记住密码」，或在重登时选择记住，插件会在到期前 **48 小时**
+  自动用密码重新登录，账号不会掉线。密码以明文存在 `plugin-data/magic2api/accounts.json`，
+  跟 token 同级；行内「关自动」会立刻删掉密码。连续失败 3 次后降到每天重试一次并写警告日志
 - 过期后 api-key 自身还剩不到 2 小时的余量，这段时间仍会照常服务
 - 重新登录会按 **alias → 手机号 → JWT 里的 user id** 匹配已有账号并原地续期，
   不会多出一条重复账号
@@ -130,7 +133,7 @@
 | GET | `/accounts/export` | 导出账号：`?id=<账号 id>` 导出单个，不带参数导出整池（`Content-Disposition: attachment`） |
 | POST | `/accounts/add` | 添加账号（`{authorization, organization_code?, alias?, priority?}`） |
 | POST | `/accounts/delete` | 删除账号（`{id}`） |
-| POST | `/accounts/update` | 改优先级/启停/复活/备注（`{id, priority?, disabled?, dead?, note?}`） |
+| POST | `/accounts/update` | 改优先级/启停/复活/备注/自动重登（`{id, priority?, disabled?, dead?, note?, auto_relogin?, password?}`；`auto_relogin:false` 会删除已存密码） |
 | POST | `/accounts/refresh` | 强制续期 api-key（`{id}`） |
 | GET | `/models` | 模型目录 |
 | POST | `/models/refresh` | 重新拉取模型目录 |
@@ -217,6 +220,8 @@ CGO_ENABLED=0 go test ./...
 
 - **JWT 不可刷新**：上游没有 refresh 接口，30 天后必须重新登录。控制台会显示
   每个账号的令牌剩余天数，行内「重登」用密码即可原地续期，但插件不会替你保存密码。
+- **自动重登需要真实手机号**：上游返回的手机号是打码的（`156****2610`），插件不会用它去登录；
+  自动重登只在你用手机号+密码登录过一次、且勾了「记住密码」时启用
 - **登录只实测到「请求被上游接受」**：本机没有第二个可登录账号（桌面端已登录、手机号打码、密码未知），
   因此手机号密码登录与短信登录都验证到上游返回语义错误（`2152 手机号或密码错误`、`2168 验证码错误`），
   没有完成一次真实的新账号登录。短信登录的图形验证码算法已复刻并实测通过 `POST /captcha/verify`。
