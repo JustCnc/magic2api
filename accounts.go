@@ -22,6 +22,9 @@ type credential struct {
 	OrganizationCode string     `json:"organization_code"`
 	Device           deviceInfo `json:"device"`
 
+	// JWTExpiresAt is read from the JWT exp claim at load/login time. It never
+	// changes while the account lives: the login token cannot be refreshed.
+	JWTExpiresAt          int64  `json:"jwt_expires_at,omitempty"`
 	APIKey                string `json:"api_key,omitempty"`
 	RefreshToken          string `json:"refresh_token,omitempty"`
 	APIKeyExpiresAt       int64  `json:"api_key_expires_at,omitempty"`
@@ -246,6 +249,15 @@ func newPool() *pool {
 func (p *pool) put(c *credential) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if c != nil {
+		// Derive the JWT deadline from the token itself so a re-login that swaps
+		// the authorization always picks up the new exp.
+		c.mu.Lock()
+		if exp := jwtExpiresAtMillis(c.Authorization); exp > 0 {
+			c.JWTExpiresAt = exp
+		}
+		c.mu.Unlock()
+	}
 	if _, exists := p.accounts[c.ID]; !exists {
 		p.order = append(p.order, c.ID)
 	}
@@ -352,12 +364,20 @@ func usable(c *credential) bool {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return !c.Dead && !c.Disabled && c.Authorization != "" && c.OrganizationCode != ""
+	return usableLocked(c)
 }
 
-// usableLocked is the lock-free form for callers already holding c.mu.
+// usableLocked is the lock-free form for callers already holding c.mu. An
+// account whose login token expired can still serve from its cached api key
+// until that key's own TTL runs out; after that nobody can mint a new one.
 func usableLocked(c *credential) bool {
-	return c != nil && !c.Dead && !c.Disabled && c.Authorization != "" && c.OrganizationCode != ""
+	if c == nil || c.Dead || c.Disabled || c.Authorization == "" || c.OrganizationCode == "" {
+		return false
+	}
+	if c.jwtDeadLocked(time.Now()) && !c.apiKeyValidLocked(0) {
+		return false
+	}
+	return true
 }
 
 // accountManager owns token rotation and health state.
@@ -380,6 +400,13 @@ func (m *accountManager) ensureAPIKey(ctx context.Context, c *credential) (strin
 	}
 	if c.apiKeyValid(5 * time.Minute) {
 		return c.APIKey, nil
+	}
+	if exp, dead := c.jwtDeadline(); dead {
+		return "", &failure{
+			Status:  http.StatusUnauthorized,
+			Auth:    true,
+			Message: fmt.Sprintf("账号 %s 的登录令牌已于 %s 过期，请重新登录", c.label(), exp.Format("2006-01-02 15:04")),
+		}
 	}
 	m.mu.Lock()
 	if ch, busy := m.flight[c.ID]; busy {

@@ -98,7 +98,9 @@
         上游模型网关 <code>i-magic-service.letsmagic.cn/v1/*</code> 用 <code>api-key</code> 鉴权，
         账号/资产接口用 <code>authorization + organization-code</code>。
         模型对外暴露为 <code id="prefix-hint">magic/&lt;模型 id&gt;</code>。
-        每个账号独立 device_id；api-key 2 小时自动续期，JWT 有效期 30 天且不可刷新，过期需重新登录。
+        每个账号独立 device_id；api-key 2 小时自动续期（refresh_token 7 天）。
+        <b>JWT（登录令牌）有效期 30 天且上游没有刷新接口</b>，到期前要在「账号」页点 <b>重登</b>
+        （或用密码/短信重新登录，会自动续到原账号上）；过期后只剩 api-key 自身 2 小时的余量可用。
       </div>
     </div>
   </section>
@@ -145,7 +147,7 @@
         <span class="spacer"></span>
         <button class="act ghost" id="btn-export-all">导出全部</button></div>
       <div class="scroll"><table>
-        <thead><tr><th>别名</th><th>用户</th><th>组织</th><th>设备</th><th>优先级</th><th>api-key</th><th>状态</th><th>操作</th></tr></thead>
+        <thead><tr><th>别名</th><th>用户</th><th>组织</th><th>设备</th><th>优先级</th><th>api-key</th><th>登录令牌</th><th>状态</th><th>操作</th></tr></thead>
         <tbody id="accounts-body"></tbody>
       </table></div>
     </div>
@@ -396,21 +398,35 @@ async function loadOverview() {
 }
 
 // ---- accounts ----
+// The login token (JWT) lasts 30 days and cannot be refreshed, so the console
+// has to surface its deadline: after it passes only a fresh sign-in helps.
+function fmtJwt(a) {
+  if (!a.jwt_expires_at) return { pill: '<span class="pill">未知</span>', when: "—" };
+  const left = a.jwt_expires_at - Date.now();
+  const days = Math.floor(left / 86400000);
+  const when = "至 " + fmtTime(a.jwt_expires_at);
+  if (a.jwt_expired) return { pill: '<span class="pill err">已过期</span>', when };
+  if (days <= 7) return { pill: '<span class="pill warn">剩 ' + Math.max(days, 0) + ' 天</span>', when };
+  return { pill: '<span class="pill ok">剩 ' + days + ' 天</span>', when };
+}
+
 async function loadAccounts() {
   const accounts = await api("/accounts");
   state.accounts = accounts || [];
   document.getElementById("accounts-count").textContent = "共 " + state.accounts.length + " 个";
   const body = document.getElementById("accounts-body");
   if (!state.accounts.length) {
-    body.innerHTML = `<tr><td colspan="8" class="muted">还没有账号，用上面的登录方式添加</td></tr>`;
+    body.innerHTML = `<tr><td colspan="9" class="muted">还没有账号，用上面的登录方式添加</td></tr>`;
     return;
   }
   body.innerHTML = state.accounts.map(a => {
     const status = a.dead ? '<span class="pill err">已注销</span>'
       : a.disabled ? '<span class="pill warn">已禁用</span>'
+      : (a.jwt_expired && !a.api_key_valid) ? '<span class="pill err">需重登</span>'
       : (a.cooldown_until && a.cooldown_until > Date.now()) ? '<span class="pill warn">冷却中</span>'
       : '<span class="pill ok">可用</span>';
     const key = a.api_key_valid ? '<span class="pill ok">有效</span>' : '<span class="pill warn">待续期</span>';
+    const jwt = fmtJwt(a);
     return `<tr>
       <td>${esc(a.alias)}<div class="muted" style="font-size:11px">${esc(a.source)}</div></td>
       <td>${esc(a.nickname || "-")}<div class="muted" style="font-size:11px">${esc(a.phone || a.user_id || "")}</div></td>
@@ -418,11 +434,13 @@ async function loadAccounts() {
       <td>${esc(a.device_name)}<div class="muted" style="font-size:11px">${esc(a.device_id.slice(0, 16))}…</div></td>
       <td>${a.priority}</td>
       <td>${key}<div class="muted" style="font-size:11px">${fmtTime(a.api_key_expires_at)}</div></td>
+      <td>${jwt.pill}<div class="muted" style="font-size:11px">${jwt.when}</div></td>
       <td>${status}${a.last_error ? `<div class="muted" style="font-size:11px">${esc(a.last_error.slice(0, 60))}</div>` : ""}</td>
       <td>
         <button class="act ghost" data-act="refresh" data-id="${esc(a.id)}">续期</button>
         <button class="act ghost" data-act="toggle" data-id="${esc(a.id)}" data-disabled="${a.disabled}">${a.disabled ? "启用" : "禁用"}</button>
         ${a.dead ? `<button class="act ghost" data-act="revive" data-id="${esc(a.id)}">复活</button>` : ""}
+        <button class="act ghost" data-act="relogin" data-id="${esc(a.id)}">重登</button>
         <button class="act ghost" data-act="export" data-id="${esc(a.id)}">导出</button>
         <button class="act ghost" data-act="delete" data-id="${esc(a.id)}">删除</button>
       </td></tr>`;
@@ -480,6 +498,17 @@ document.getElementById("accounts-body").addEventListener("click", async event =
     } else if (button.dataset.act === "revive") {
       await api("/accounts/update", { method: "POST", body: JSON.stringify({ id, dead: false }) });
       toast("已复活", "ok");
+    } else if (button.dataset.act === "relogin") {
+      const account = state.accounts.find(a => a.id === id);
+      const phone = (account && account.phone) || prompt("手机号");
+      if (!phone) return;
+      const password = prompt("账号 " + id + " 的登录密码（用于续期 " + (account && account.phone ? phone : "该账号") + "）");
+      if (!password) return;
+      button.disabled = true;
+      await api("/login/password", { method: "POST", body: JSON.stringify({ phone, password, alias: id }) });
+      toast("已重新登录并续期", "ok");
+      await loadAccounts();
+      return;
     } else if (button.dataset.act === "export") {
       button.disabled = false;
       await exportAccounts(id);

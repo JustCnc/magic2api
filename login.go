@@ -278,6 +278,27 @@ func (a *app) sendSMSCode(ctx context.Context, phone, stateCode, captchaToken st
 	return errUnwrap
 }
 
+// findAccountForLogin matches an existing account by alias, phone or user id so
+// that signing in again renews it in place instead of adding a parallel entry.
+func (a *app) findAccountForLogin(alias, phone, authorization string) *credential {
+	if alias != "" {
+		if account := a.pool.get(accountIDForAlias(alias)); account != nil {
+			return account
+		}
+	}
+	phone = strings.TrimSpace(phone)
+	userID := jwtSubject(authorization)
+	for _, account := range a.pool.snapshot() {
+		account.mu.Lock()
+		match := (phone != "" && account.Phone == phone) || (userID != "" && account.UserID == userID)
+		account.mu.Unlock()
+		if match {
+			return account
+		}
+	}
+	return nil
+}
+
 // adoptLogin turns a fresh JWT into a pool account.
 func (a *app) adoptLogin(ctx context.Context, authorization, alias, phone string) (*credential, error) {
 	authorization = strings.TrimSpace(authorization)
@@ -287,6 +308,11 @@ func (a *app) adoptLogin(ctx context.Context, authorization, alias, phone string
 	org, err := a.resolveOrganization(ctx, authorization)
 	if err != nil {
 		return nil, err
+	}
+	// Signing in again is the only way to renew the 30-day login token, so an
+	// existing account for the same person is reused instead of duplicated.
+	if existing := a.findAccountForLogin(alias, phone, authorization); existing != nil {
+		alias = existing.Alias
 	}
 	if alias == "" {
 		alias = "login-" + time.Now().In(serverZone).Format("0102-150405")

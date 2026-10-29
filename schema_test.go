@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"math/big"
 	"net/http"
@@ -522,5 +523,102 @@ func TestExportAccountsSingleAndPool(t *testing.T) {
 	missing := a.handleManagement(managementRequest{Method: "GET", Path: "/accounts/export", Query: url.Values{"id": {"nope"}}})
 	if missing.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown id status %d: %s", missing.StatusCode, missing.Body)
+	}
+}
+
+func TestJWTExpiryAndSubject(t *testing.T) {
+	// Shaped exactly like the token the account service issues: HS256 header and
+	// base64 segments WITH padding (not RFC 7515 raw-url-safe).
+	claims := `{"iss":974262954061238274,"exp":1795834730,"sub":"Json Web Token","cus":{"device_id":"f4adff"}}`
+	token := base64.StdEncoding.EncodeToString([]byte(`{"alg":"HS256","type":"JWT"}`)) + "." +
+		base64.StdEncoding.EncodeToString([]byte(claims)) + "." +
+		strings.Repeat("0", 64)
+
+	exp, ok := jwtExpiry(token)
+	if !ok {
+		t.Fatal("jwtExpiry failed on a padded token")
+	}
+	if got := exp.Unix(); got != 1795834730 {
+		t.Fatalf("exp = %d, want 1795834730", got)
+	}
+	if got := jwtExpiresAtMillis(token); got != exp.UnixMilli() {
+		t.Fatalf("jwtExpiresAtMillis = %d", got)
+	}
+	if got := jwtSubject(token); got != "974262954061238274" {
+		t.Fatalf("jwtSubject = %q", got)
+	}
+	// A token without exp stays "unknown" instead of pretending to be expired.
+	noExp := base64.StdEncoding.EncodeToString([]byte(`{"iss":5}`))
+	if _, ok := jwtExpiry("h." + noExp + ".s"); ok {
+		t.Fatal("a token without exp produced a deadline")
+	}
+	if _, ok := jwtExpiry("not-a-jwt"); ok {
+		t.Fatal("garbage parsed as a JWT")
+	}
+	if jwtExpiresAtMillis("") != 0 {
+		t.Fatal("empty token produced a deadline")
+	}
+}
+
+func TestPoolPutDerivesJWTDeadline(t *testing.T) {
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":123,"exp":1795834730}`))
+	token := "eyJhbGciOiJIUzI1NiJ9." + payload + ".sig"
+	p := newPool()
+	p.put(&credential{ID: "a", Alias: "a", Authorization: token, OrganizationCode: "o"})
+	if got := p.get("a").JWTExpiresAt; got != 1795834730000 {
+		t.Fatalf("JWTExpiresAt = %d", got)
+	}
+
+	// Replacing the token (re-login) must move the deadline, not keep the stale one.
+	fresh := base64.RawURLEncoding.EncodeToString([]byte(`{"iss":123,"exp":1798834730}`))
+	p.put(&credential{ID: "a", Alias: "a", Authorization: "eyJhbGciOiJIUzI1NiJ9." + fresh + ".sig", OrganizationCode: "o"})
+	if got := p.get("a").JWTExpiresAt; got != 1798834730000 {
+		t.Fatalf("deadline not refreshed: %d", got)
+	}
+}
+
+func TestExpiredJWTStopsTheAccount(t *testing.T) {
+	past := time.Now().Add(-time.Hour).UnixMilli()
+	future := time.Now().Add(time.Hour).UnixMilli()
+
+	// Login token expired and the api key is gone: nobody can mint a new one.
+	dead := &credential{ID: "dead", Authorization: "t", OrganizationCode: "o", JWTExpiresAt: past}
+	if usable(dead) {
+		t.Fatal("expired login token with no api key still reported usable")
+	}
+	// Login token expired but the cached api key is inside its own 2h window:
+	// keep serving, upstream only checks the key.
+	alive := &credential{ID: "alive", Authorization: "t", OrganizationCode: "o", JWTExpiresAt: past,
+		APIKey: "mgw_x", APIKeyExpiresAt: time.Now().Add(90 * time.Minute).UnixMilli()}
+	if !usable(alive) {
+		t.Fatal("cached api key was dropped early")
+	}
+	if !usable(&credential{ID: "ok", Authorization: "t", OrganizationCode: "o", JWTExpiresAt: future}) {
+		t.Fatal("valid login token reported unusable")
+	}
+	// Unparsable token keeps no local opinion and is left to upstream.
+	if !usable(&credential{ID: "raw", Authorization: "t", OrganizationCode: "o"}) {
+		t.Fatal("unknown expiry blocked the account")
+	}
+}
+
+func TestEnsureAPIKeyReportsExpiredLogin(t *testing.T) {
+	a := &app{pool: newPool(), log: newLogRing(10)}
+	a.accounts = newAccountManager(a)
+	account := &credential{ID: "old", Alias: "old", Authorization: "t", OrganizationCode: "o",
+		JWTExpiresAt: time.Now().Add(-48 * time.Hour).UnixMilli()}
+	_, err := a.accounts.ensureAPIKey(context.Background(), account)
+	if err == nil {
+		t.Fatal("expected a failure for an expired login token")
+	}
+	f := asFailure(err)
+	if !f.Auth || f.Retryable {
+		t.Fatalf("failure flags: %+v", f)
+	}
+	if !strings.Contains(f.Message, "过期") || !strings.Contains(f.Message, "重新登录") {
+		t.Fatalf("message should mention re-login: %q", f.Message)
+	}
+	if f.Dead {
+		t.Fatal("an expired login token should not mark the account dead")
 	}
 }

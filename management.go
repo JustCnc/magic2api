@@ -212,6 +212,8 @@ type accountView struct {
 	DeviceID         string `json:"device_id"`
 	OS               string `json:"os"`
 	APIKeyValid      bool   `json:"api_key_valid"`
+	JWTExpiresAt     int64  `json:"jwt_expires_at"`
+	JWTExpired       bool   `json:"jwt_expired"`
 	APIKeyExpiresAt  int64  `json:"api_key_expires_at"`
 	RefreshExpiresAt int64  `json:"refresh_token_expires_at"`
 	CooldownUntil    int64  `json:"cooldown_until"`
@@ -241,6 +243,8 @@ func (a *app) listAccounts() []accountView {
 			DeviceID:         c.Device.ID,
 			OS:               strings.TrimSpace(c.Device.OS + " " + c.Device.OSVersion),
 			APIKeyValid:      c.apiKeyValidLocked(0),
+			JWTExpiresAt:     c.JWTExpiresAt,
+			JWTExpired:       c.jwtDeadLocked(time.Now()),
 			APIKeyExpiresAt:  c.APIKeyExpiresAt,
 			RefreshExpiresAt: c.RefreshTokenExpiresAt,
 			LastSuccess:      c.lastSuccess.UnixMilli(),
