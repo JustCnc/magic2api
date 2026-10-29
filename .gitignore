@@ -12,3 +12,7 @@
 .DS_Store
 .pi/
 .tmp/
+
+# 逆向过程文档只在本地保留，不进仓库
+docs/REVERSE_ENGINEERING.md
+docs/EVIDENCE.md

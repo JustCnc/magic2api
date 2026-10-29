@@ -47,7 +47,7 @@
 
 - [ ] 如果作者/仓库信息变了，同步 `plugin.go` 的 `Author`、`GitHubRepository`。
 - [ ] 如果配置项变了，更新 `README.md` 与 `config.example.yaml`。
-- [ ] 如果上游客户端升级了，重新核对 `docs/REVERSE_ENGINEERING.md` 里的域名、路径、请求头。
+- [ ] 如果上游客户端升级了，重新核对协议文档里的域名、路径、请求头（本地文档，不入仓库）。
 - [ ] 确认 `cpa_plugins/registry.json` 的 `id` 仍是 `magic2api`，`repository` 仍是
       `https://github.com/JustCnc/magic2api`。
 

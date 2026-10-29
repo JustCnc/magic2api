@@ -6,8 +6,6 @@
 - 上游模型网关：`https://i-magic-service.letsmagic.cn/v1/*`（`api-key: mgw_...` 鉴权，原生 OpenAI 协议）
 - 上游资产/账号网关：`https://i-magic-service.letsmagic.cn/api/v1/*`（`authorization` + `organization-code`）
 - 上游账号服务：`https://i-keewood-service.teamshare.cn/v4/*`、`/captcha/*`
-- 逆向结论与证据：[`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERING.md)
-- 实测记录：[`docs/EVIDENCE.md`](docs/EVIDENCE.md)
 - 配置示例：[`config.example.yaml`](config.example.yaml)
 - 发版流程：[`RELEASING.md`](RELEASING.md)
 
