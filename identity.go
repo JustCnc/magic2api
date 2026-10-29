@@ -6,7 +6,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // The desktop client identifies a login device with a four-field object built
@@ -52,9 +55,12 @@ func newDevice(seed string) deviceInfo {
 		Device:  map[string]string{"vendor": "", "model": "", "type": ""},
 		CPU:     map[string]string{"architecture": "amd64"},
 	}
-	// The seed participates in the hash so two aliases never collide.
-	payload.UA = payload.UA + " " + seed
-	raw, _ := json.Marshal(payload)
+	// The seed participates in the hash so two aliases never collide. It is not
+	// part of the ua field: only the digest leaves the machine, and the client
+	// never transmits the parser result itself.
+	fingerprint := payload
+	fingerprint.UA = payload.UA + "|" + seed
+	raw, _ := json.Marshal(fingerprint)
 	sum := md5.Sum(raw)
 	return deviceInfo{
 		ID:        hex.EncodeToString(sum[:]),
@@ -72,15 +78,62 @@ func randomHex(n int) string {
 	return hex.EncodeToString(buf)
 }
 
-// requestID reproduces the client's request-id header: an 8-char base36 time
-// prefix, 6 random bytes and an 8-char session fingerprint, all upper case.
+// The client stamps every request with a 28-character request-id:
+//
+//	base36(now in ms) last 8 | 12 hex random | 8 hex session fingerprint
+//
+// all upper case (createRequestId in the web bundle). The fingerprint is a
+// 32-bit rolling hash of the browser's stable properties, so it is constant for
+// one machine and changes with the environment, which is why it is computed
+// once here.
+const (
+	sessionUserAgent   = defaultUserAgent
+	sessionCPUThreads  = "8"
+	sessionScreenWidth = "1920"
+	sessionTimeZone    = "Asia/Shanghai"
+)
+
+var (
+	fingerprintOnce sync.Once
+	fingerprintHex  string
+)
+
+func sessionFingerprint() string {
+	fingerprintOnce.Do(func() {
+		joined := strings.Join([]string{sessionUserAgent, sessionCPUThreads, sessionScreenWidth, sessionTimeZone}, "|")
+		var acc int32
+		for _, b := range []byte(joined) {
+			acc = acc*33 + int32(b)
+		}
+		if acc < 0 {
+			acc = -acc
+		}
+		value := strconv.FormatInt(int64(acc), 16)
+		if len(value) > 8 {
+			value = value[:8]
+		}
+		if value == "" {
+			value = "0"
+		}
+		fingerprintHex = strings.ToUpper(value)
+	})
+	return fingerprintHex
+}
+
+// requestID reproduces the client's request-id header. session, when given,
+// overrides the process fingerprint.
 func requestID(session string) string {
-	var b strings.Builder
-	b.WriteString(strings.ToUpper(randomHex(12)))
-	if len(session) >= 8 {
-		b.WriteString(strings.ToUpper(session[:8]))
-	} else {
-		b.WriteString(strings.ToUpper(randomHex(4)))
+	stamp := strconv.FormatInt(time.Now().UnixMilli(), 36)
+	if len(stamp) > 8 {
+		stamp = stamp[len(stamp)-8:]
 	}
-	return b.String()
+	stamp = strings.Repeat("0", 8-len(stamp)) + stamp
+	if session == "" {
+		session = sessionFingerprint()
+	}
+	session = strings.ToUpper(session)
+	if len(session) > 8 {
+		session = session[:8]
+	}
+	return strings.ToUpper(stamp) + strings.ToUpper(randomHex(6)) + session
 }

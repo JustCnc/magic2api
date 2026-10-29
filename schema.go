@@ -12,7 +12,7 @@ import (
 // dependency to build.
 const (
 	providerKey   = "magic2api"
-	pluginVersion = "0.1.14"
+	pluginVersion = "0.1.15"
 	abiVersion    = 1
 	schemaVersion = 6
 )

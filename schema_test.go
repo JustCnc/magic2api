@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"math/big"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -881,5 +883,36 @@ func TestSumTodayRecordsSplitsIncomeAndExpense(t *testing.T) {
 	// No login gift today: the console must show 未领取 rather than a zero claim.
 	if gift, _, _, claimedAt := sumTodayRecords(nil, expense); gift != 0 || claimedAt != "" {
 		t.Fatalf("empty income: gift=%v claimedAt=%q", gift, claimedAt)
+	}
+}
+
+// The web bundle builds request-id as base36(now ms) | 12 hex random | 8 hex
+// session fingerprint; anything else is a fingerprint of its own.
+func TestRequestIDMatchesClientFormat(t *testing.T) {
+	id := requestID("")
+	if len(id) != 28 {
+		t.Fatalf("length = %d, want 28: %q", len(id), id)
+	}
+	if id != strings.ToUpper(id) {
+		t.Fatalf("not upper case: %q", id)
+	}
+	stamp, err := strconv.ParseInt(id[:8], 36, 64)
+	if err != nil {
+		t.Fatalf("time prefix %q is not base36: %v", id[:8], err)
+	}
+	if drift := time.Since(time.UnixMilli(stamp)); drift < -time.Second || drift > 5*time.Second {
+		t.Fatalf("time prefix is %v off", drift)
+	}
+	if _, err := hex.DecodeString(id[8:20]); err != nil {
+		t.Fatalf("random part %q is not hex: %v", id[8:20], err)
+	}
+	if tail := id[20:]; tail != sessionFingerprint() {
+		t.Fatalf("fingerprint = %q, want %q", tail, sessionFingerprint())
+	}
+	if tail := requestID("DEADBEEFcafe"); tail[20:] != "DEADBEEF" {
+		t.Fatalf("session override = %q", tail[20:])
+	}
+	if requestID("")[8:20] == requestID("")[8:20] {
+		t.Fatal("random part repeats between calls")
 	}
 }
