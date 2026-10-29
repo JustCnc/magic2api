@@ -1,6 +1,6 @@
-# magic2api — 超级麦吉（Magic）模型网关 → CLIProxyAPI 插件
+# magic2api — 某吉模型网关 → CLIProxyAPI 插件
 
-把超级麦吉桌面端（`Magic` 0.0.19）使用的模型网关接进 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)，
+把某吉桌面端（0.0.19）使用的模型网关接进 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)，
 对外提供 OpenAI 兼容接口（`/v1/chat/completions`、`/v1/models`），并附带账号池、登录、积分、请求日志和内嵌控制台。
 
 - 上游模型网关：`https://i-magic-service.letsmagic.cn/v1/*`（`api-key: mgw_...` 鉴权，原生 OpenAI 协议）
