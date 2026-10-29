@@ -445,3 +445,24 @@ func TestParseSseEventsAcrossLines(t *testing.T) {
 		t.Fatalf("unexpected stats: %+v", stats)
 	}
 }
+
+func TestManagementPathNormalisation(t *testing.T) {
+	// The console page is reachable from both mounts, and older builds produced a
+	// doubled plugin prefix; every shape must land on the same handler.
+	cases := map[string]string{
+		"/ui":                                     "/ui",
+		"/magic2api/ui":                           "/ui",
+		"/v0/management/magic2api/ui":             "/ui",
+		"/magic2api/magic2api/ui":                 "/ui",
+		"/v0/resource/plugins/magic2api/ui":       "/ui",
+		"/ui?state=abc":                           "/ui",
+		"/magic2api/accounts/refresh":             "/accounts/refresh",
+		"/v0/management/magic2api/points?id=live": "/points",
+		"/": "/",
+	}
+	for input, want := range cases {
+		if got := normalizeManagementPath(input); got != want {
+			t.Errorf("normalizeManagementPath(%q) = %q, want %q", input, got, want)
+		}
+	}
+}

@@ -71,7 +71,14 @@
 
 ## 控制台
 
-菜单入口：CPA 控制台 → **Magic2API**（`/v0/management/magic2api/ui`）。页签：
+菜单入口：CPA 控制台 → **Magic2API**，对应 URL 是
+`/v0/resource/plugins/magic2api/ui`（宿主的资源路由，**不需要**管理密钥即可打开页面）。
+页面第一次打开会提示填写 CPA 的 `management.secret-key`，密钥只存在本机 localStorage，
+之后所有数据请求都以 `Authorization` / `X-Management-Key` 头带上它。
+
+也可以直接开带密钥的管理路由：`/v0/management/magic2api/ui`（浏览器里同样需要填一次密钥）。
+
+页签：
 
 - **概览**：账号数/可用数、模型数、请求量、限流次数、token 与积分累计、目录来源与刷新时间
 - **账号**：登录/导入区 + 账号表（邮箱/昵称、组织、设备名与设备码、优先级、api-key 状态、冷却、错误）
@@ -192,8 +199,9 @@ CGO_ENABLED=0 go test ./...
 - **每日积分只在「个人组织」有意义**：上游 `login-gift` 对个人组织生效；团队组织返回未领取属正常。
 - **账号健康度不落盘**：冷却、失败次数在进程内，重启清零；`dead`/`disabled`/优先级会落盘。
 - **未实现 Responses / Anthropic 格式**：插件只声明 `chat-completions` 输入输出。
-- **控制台需要 CPA 的管理密钥**：`/v0/management/*` 由宿主鉴权（`X-Management-Key`），
-  浏览器直接打开会 401；正常入口是 CPA 控制台里的 **Magic2API** 菜单（GUI 自带鉴权）。
+- **控制台需要 CPA 的管理密钥**：数据接口由宿主鉴权，页面本身可以从
+  `/v0/resource/plugins/magic2api/ui` 免密打开，但要在页面顶部填写一次
+  `management.secret-key`（保存在本机 localStorage）。没配置 secret-key 的 CPA 不会有这个提示。
 - **积分回填不占请求链路**：回填走单 worker + 有界队列（256），队列满时丢弃并记一条 warn，
   不影响对话本身。
 

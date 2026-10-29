@@ -43,7 +43,7 @@ func (a *app) managementRegistration() managementRegistration {
 	return managementRegistration{
 		Routes: specs,
 		Resources: []resourceRouteSpec{
-			{Path: prefix + "/ui", Menu: "Magic2API", Description: "超级麦吉反代控制台：账号池、登录、模型目录、积分与请求日志。"},
+			{Path: "/ui", Menu: "Magic2API", Description: "超级麦吉反代控制台：账号池、登录、模型目录、积分与请求日志。"},
 		},
 	}
 }
@@ -69,15 +69,37 @@ func okResponse(body any) managementResponse {
 	return jsonResponse(http.StatusOK, map[string]any{"ok": true, "data": body})
 }
 
-func (a *app) handleManagement(req managementRequest) managementResponse {
-	path := strings.TrimSpace(req.Path)
-	if idx := strings.Index(path, "/"+providerKey+"/"); idx >= 0 {
-		path = path[idx+len(providerKey)+2:]
-	}
+// normalizeManagementPath reduces every path shape the host may hand over to the
+// plugin-relative form: /ui, /magic2api/ui, /v0/management/magic2api/ui and a
+// doubled prefix (which is what the console menu link used to produce) all
+// collapse to /ui.
+func normalizeManagementPath(raw string) string {
+	path := strings.TrimSpace(raw)
 	if idx := strings.IndexByte(path, '?'); idx >= 0 {
 		path = path[:idx]
 	}
-	path = "/" + strings.TrimPrefix(path, "/")
+	if idx := strings.IndexByte(path, '#'); idx >= 0 {
+		path = path[:idx]
+	}
+	path = strings.TrimPrefix(path, "/v0/management")
+	path = strings.TrimPrefix(path, "/v0/resource/plugins")
+	path = strings.TrimPrefix(path, "/plugins")
+	for {
+		trimmed := strings.TrimPrefix(strings.TrimPrefix(path, "/"), providerKey+"/")
+		if trimmed == path {
+			break
+		}
+		path = trimmed
+	}
+	path = strings.Trim(path, "/")
+	if path == "" {
+		return "/"
+	}
+	return "/" + path
+}
+
+func (a *app) handleManagement(req managementRequest) managementResponse {
+	path := normalizeManagementPath(req.Path)
 	method := strings.ToUpper(strings.TrimSpace(req.Method))
 
 	switch {

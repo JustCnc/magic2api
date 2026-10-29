@@ -55,6 +55,9 @@
   .toast { padding: 9px 14px; border-radius: 8px; background: var(--panel2); border: 1px solid var(--line); font-size: 13px; max-width: 420px; }
   .toast.ok { border-color: #245c45; }
   .toast.err { border-color: #5f2b2d; }
+  .keybar { display: flex; gap: 10px; align-items: center; padding: 10px 18px; background: #2a2118;
+            border-bottom: 1px solid #5b4720; color: var(--warn); font-size: 13px; }
+  .keybar input { max-width: 320px; }
   .muted { color: var(--muted); }
   .flex { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .spacer { flex: 1; }
@@ -67,6 +70,12 @@
   <span class="spacer"></span>
   <button class="act ghost" id="btn-refresh-all">刷新</button>
 </header>
+
+<div id="keybar" class="keybar" style="display:none">
+  <span id="keybar-msg">这台 CPA 启用了管理密钥，请先填写</span>
+  <input id="key-input" type="password" placeholder="management.secret-key" />
+  <button class="act" id="btn-save-key">保存</button>
+</div>
 
 <nav id="tabs">
   <button data-tab="overview" class="active">概览</button>
@@ -233,8 +242,55 @@
 <div class="toasts" id="toasts"></div>
 
 <script>
-const API = location.pathname.replace(/\/ui\/?$/, "").replace(/\/+$/, "");
-const state = { tab: "overview", accounts: [], models: [], captcha: null, pointsAccount: "", loginState: new URLSearchParams(location.search).get("state") || "" };
+// The page is served from /v0/resource/plugins/<id>/ui (no auth) or
+// /v0/management/<id>/ui (with auth); data always goes to the management mount.
+function managementBase() {
+  const path = location.pathname.replace(/\/+$/, "");
+  const resource = path.match(/^\/v0\/resource\/plugins\/([^/]+)/);
+  if (resource) return "/v0/management/" + resource[1];
+  return path.replace(/\/ui$/, "");
+}
+const API = managementBase();
+const KEY_STORE = "magic2api.managementKey";
+const state = {
+  tab: "overview",
+  accounts: [],
+  models: [],
+  captcha: null,
+  pointsAccount: "",
+  loginState: new URLSearchParams(location.search).get("state") || "",
+  key: "",
+};
+
+// The console is served without auth; every data call needs the host's
+// management secret key. It stays in localStorage and never leaves this origin.
+function loadKey() {
+  const fromUrl = new URLSearchParams(location.search).get("key");
+  if (fromUrl) {
+    localStorage.setItem(KEY_STORE, fromUrl);
+    const url = new URL(location.href);
+    url.searchParams.delete("key");
+    history.replaceState(null, "", url.toString());
+  }
+  state.key = localStorage.getItem(KEY_STORE) || "";
+  if (state.key) document.getElementById("key-input").value = state.key;
+  updateKeyBar();
+}
+function updateKeyBar(visible, message) {
+  const bar = document.getElementById("keybar");
+  if (visible === undefined) visible = !state.key;
+  bar.style.display = visible ? "flex" : "none";
+  if (message) document.getElementById("keybar-msg").textContent = message;
+}
+function saveKey() {
+  const value = document.getElementById("key-input").value.trim();
+  if (!value) { toast("请输入管理密钥", "err"); return; }
+  localStorage.setItem(KEY_STORE, value);
+  state.key = value;
+  updateKeyBar(false);
+  toast("密钥已保存", "ok");
+  loadTab(state.tab);
+}
 
 function toast(message, kind) {
   const box = document.createElement("div");
@@ -246,12 +302,21 @@ function toast(message, kind) {
 
 async function api(path, options) {
   const opts = Object.assign({ headers: { "Content-Type": "application/json" } }, options || {});
+  if (state.key) {
+    opts.headers.Authorization = "Bearer " + state.key;
+    opts.headers["X-Management-Key"] = state.key;
+  }
   let response;
   try {
     response = await fetch(API + path, opts);
   } catch (err) {
     toast("请求失败：" + err.message, "err");
     throw err;
+  }
+  if (response.status === 401 || response.status === 403) {
+    updateKeyBar(true, state.key ? "管理密钥被拒绝，请重新填写" : "这台 CPA 启用了管理密钥，请先填写");
+    toast(state.key ? "管理密钥无效" : "需要管理密钥", "err");
+    throw new Error("unauthorized");
   }
   const text = await response.text();
   let payload = null;
@@ -660,6 +725,9 @@ document.getElementById("btn-test").addEventListener("click", async event => {
 document.getElementById("btn-refresh-all").addEventListener("click", () => loadTab(state.tab));
 
 // boot
+document.getElementById("btn-save-key").addEventListener("click", saveKey);
+document.getElementById("key-input").addEventListener("keydown", event => { if (event.key === "Enter") saveKey(); });
+loadKey();
 (async () => {
   try { await loadOverview(); } catch (err) { /* shown */ }
 })();
