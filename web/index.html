@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Magic2API 控制台</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --line: #2a2f3a;
+    --text: #e6e8ee; --muted: #9aa3b2; --accent: #5b8cff; --ok: #35c98a;
+    --warn: #f0b23f; --err: #f2585b;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+         background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; gap: 12px; padding: 12px 18px;
+           border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .ver { color: var(--muted); font-size: 12px; }
+  nav { display: flex; gap: 4px; padding: 10px 18px 0; flex-wrap: wrap; }
+  nav button { background: transparent; color: var(--muted); border: 1px solid transparent;
+               padding: 7px 14px; border-radius: 8px 8px 0 0; cursor: pointer; font-size: 13px; }
+  nav button.active { background: var(--panel); color: var(--text); border-color: var(--line); border-bottom-color: var(--panel); }
+  main { padding: 0 18px 28px; }
+  section { display: none; }
+  section.active { display: block; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin: 12px 0; }
+  .card h2 { font-size: 14px; margin: 0 0 10px; font-weight: 600; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+  .stat { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  .stat .k { color: var(--muted); font-size: 12px; }
+  .stat .v { font-size: 20px; font-weight: 600; margin-top: 4px; word-break: break-all; }
+  .scroll { max-height: 460px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+  .scroll.sm { max-height: 300px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { position: sticky; top: 0; background: var(--panel2); color: var(--muted); font-weight: 500; z-index: 1; }
+  tbody tr:hover { background: #1b1f27; }
+  .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line); }
+  .pill.ok { color: var(--ok); border-color: #245c45; }
+  .pill.warn { color: var(--warn); border-color: #5b4720; }
+  .pill.err { color: var(--err); border-color: #5f2b2d; }
+  button.act { background: var(--accent); color: #fff; border: 0; border-radius: 7px; padding: 6px 12px;
+               cursor: pointer; font-size: 13px; }
+  button.act.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+  button.act:disabled { opacity: .5; cursor: not-allowed; }
+  input, textarea, select { background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+                            border-radius: 7px; padding: 7px 10px; font-size: 13px; width: 100%; font-family: inherit; }
+  textarea { min-height: 84px; resize: vertical; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+  .row > label { flex: 1 1 200px; }
+  label span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+  pre { margin: 0; padding: 10px; background: #0b0d11; border-radius: 8px; overflow: auto; max-height: 320px; font-size: 12px; }
+  .toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 99; }
+  .toast { padding: 9px 14px; border-radius: 8px; background: var(--panel2); border: 1px solid var(--line); font-size: 13px; max-width: 420px; }
+  .toast.ok { border-color: #245c45; }
+  .toast.err { border-color: #5f2b2d; }
+  .muted { color: var(--muted); }
+  .flex { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .spacer { flex: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Magic2API 控制台</h1>
+  <span class="ver" id="ver"></span>
+  <span class="spacer"></span>
+  <button class="act ghost" id="btn-refresh-all">刷新</button>
+</header>
+
+<nav id="tabs">
+  <button data-tab="overview" class="active">概览</button>
+  <button data-tab="accounts">账号</button>
+  <button data-tab="models">模型</button>
+  <button data-tab="requests">请求</button>
+  <button data-tab="points">积分</button>
+  <button data-tab="logs">日志</button>
+  <button data-tab="settings">设置</button>
+  <button data-tab="test">测试对话</button>
+</nav>
+
+<main>
+  <section id="tab-overview" class="active">
+    <div class="card"><h2>运行状态</h2><div class="grid" id="overview-grid"></div></div>
+    <div class="card"><h2>说明</h2>
+      <div class="muted" style="font-size:13px;line-height:1.7">
+        上游模型网关 <code>i-magic-service.letsmagic.cn/v1/*</code> 用 <code>api-key</code> 鉴权，
+        账号/资产接口用 <code>authorization + organization-code</code>。
+        模型对外暴露为 <code id="prefix-hint">magic/&lt;模型 id&gt;</code>。
+        每个账号独立 device_id；api-key 2 小时自动续期，JWT 有效期 30 天且不可刷新，过期需重新登录。
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-accounts">
+    <div class="card">
+      <h2>登录 / 添加账号</h2>
+      <div class="row">
+        <label><span>手机号</span><input id="login-phone" placeholder="13800000000" /></label>
+        <label><span>密码（手机号+密码登录，无需验证码）</span><input id="login-password" type="password" placeholder="密码" /></label>
+        <button class="act" id="btn-login-password">密码登录</button>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <label><span>短信验证码登录：先获取图形验证码，拖动滑块把图片转正</span>
+          <div class="flex"><button class="act ghost" id="btn-captcha">获取图形验证码</button>
+          <span class="muted" id="captcha-hint">未获取</span></div>
+        </label>
+      </div>
+      <div id="captcha-box" style="display:none;margin-top:10px">
+        <div class="flex">
+          <img id="captcha-img" alt="captcha" style="width:170px;height:170px;border-radius:8px;border:1px solid var(--line)" />
+          <div style="flex:1;min-width:220px">
+            <label><span>旋转角度 <b id="captcha-angle-label">0</b>°</span>
+              <input id="captcha-angle" type="range" min="0" max="359" value="0" /></label>
+            <div class="flex" style="margin-top:8px">
+              <button class="act ghost" id="btn-send-sms">发送短信验证码</button>
+              <span class="muted" id="sms-hint"></span>
+            </div>
+            <div class="flex" style="margin-top:8px">
+              <input id="login-code" placeholder="6 位短信验证码" style="max-width:200px" />
+              <button class="act" id="btn-login-sms">短信登录</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <label><span>已有登录态（粘贴桌面端 JWT 或导出脚本输出）</span>
+          <textarea id="login-token" placeholder='{"authorization":"eyJ...","organization_code":"h70imn51gp0f"}'></textarea></label>
+        <button class="act" id="btn-login-token">导入</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>账号池 <span class="muted" id="accounts-count"></span></h2>
+      <div class="scroll"><table>
+        <thead><tr><th>别名</th><th>用户</th><th>组织</th><th>设备</th><th>优先级</th><th>api-key</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody id="accounts-body"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <section id="tab-models">
+    <div class="card">
+      <div class="flex"><h2 style="margin:0">模型目录</h2><span class="spacer"></span>
+        <button class="act ghost" id="btn-models-refresh">重新拉取</button></div>
+      <div class="muted" id="models-meta" style="margin:8px 0"></div>
+      <div class="scroll"><table>
+        <thead><tr><th>对外 id</th><th>上游 id</th><th>展示名</th><th>上下文</th><th>最大输出</th></tr></thead>
+        <tbody id="models-body"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <section id="tab-requests">
+    <div class="card"><h2>请求日志 <span class="muted">（最新 200 条）</span></h2>
+      <div class="scroll"><table>
+        <thead><tr><th>时间</th><th>账号</th><th>模型</th><th>流</th><th>状态</th><th>首字</th><th>总耗时</th><th>输入</th><th>输出</th><th>缓存</th><th>积分</th><th>错误</th></tr></thead>
+        <tbody id="requests-body"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <section id="tab-points">
+    <div class="card">
+      <div class="flex"><h2 style="margin:0">账号</h2><span class="spacer"></span>
+        <select id="points-account" style="max-width:260px"></select>
+        <button class="act ghost" id="btn-points-reload">刷新</button></div>
+    </div>
+    <div class="card"><h2>余额</h2><div class="grid" id="points-balance"></div></div>
+    <div class="card">
+      <div class="flex"><h2 style="margin:0">每日积分 / 登录奖励</h2><span class="spacer"></span>
+        <button class="act" id="btn-claim-gift">领取每日登录积分</button></div>
+      <div class="grid" id="points-today" style="margin-top:10px"></div>
+    </div>
+    <div class="card">
+      <div class="flex"><h2 style="margin:0">新人任务板</h2><span class="spacer"></span>
+        <button class="act ghost" id="btn-claim-all">一键领取可领任务</button></div>
+      <div class="scroll sm"><table>
+        <thead><tr><th>任务</th><th>积分</th><th>状态</th><th>奖励</th><th>操作</th></tr></thead>
+        <tbody id="tasks-body"></tbody>
+      </table></div>
+    </div>
+    <div class="card"><h2>积分流水</h2>
+      <div class="scroll"><table>
+        <thead><tr><th>时间</th><th>类型</th><th>变动</th><th>说明</th></tr></thead>
+        <tbody id="records-body"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <section id="tab-logs">
+    <div class="card"><h2>运行日志</h2>
+      <div class="scroll"><table>
+        <thead><tr><th>时间</th><th>级别</th><th>模块</th><th>内容</th></tr></thead>
+        <tbody id="logs-body"></tbody>
+      </table></div>
+    </div>
+  </section>
+
+  <section id="tab-settings">
+    <div class="card"><h2>运行参数（保存后立即生效，不落盘到 CPA 配置）</h2>
+      <div class="grid">
+        <label><span>单账号 rpm</span><input id="set-rpm" type="number" /></label>
+        <label><span>令牌桶 burst</span><input id="set-burst" type="number" /></label>
+        <label><span>冷却秒数</span><input id="set-cooldown" type="number" /></label>
+        <label><span>请求超时（秒）</span><input id="set-timeout" type="number" /></label>
+        <label><span>单请求最多换号次数</span><input id="set-attempts" type="number" /></label>
+        <label><span>出站代理</span><input id="set-proxy" placeholder="http://127.0.0.1:7897" /></label>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <label style="flex:0 0 auto"><span>积分回填</span><input id="set-points" type="checkbox" style="width:auto" /></label>
+        <label style="flex:0 0 auto"><span>自动领积分</span><input id="set-daily" type="checkbox" style="width:auto" /></label>
+        <label style="flex:0 0 auto"><span>调试日志</span><input id="set-debug" type="checkbox" style="width:auto" /></label>
+        <button class="act" id="btn-save-settings">保存</button>
+      </div>
+      <pre id="settings-json" style="margin-top:12px"></pre>
+    </div>
+  </section>
+
+  <section id="tab-test">
+    <div class="card"><h2>测试对话</h2>
+      <div class="row">
+        <label><span>模型</span><select id="test-model"></select></label>
+        <label><span>max_tokens</span><input id="test-max" type="number" value="256" /></label>
+        <button class="act" id="btn-test">发送</button>
+      </div>
+      <label style="display:block;margin-top:10px"><span>提示词</span>
+        <textarea id="test-prompt">用一句话介绍你自己</textarea></label>
+      <pre id="test-output" style="margin-top:12px"></pre>
+    </div>
+  </section>
+</main>
+
+<div class="toasts" id="toasts"></div>
+
+<script>
+const API = location.pathname.replace(/\/ui\/?$/, "").replace(/\/+$/, "");
+const state = { tab: "overview", accounts: [], models: [], captcha: null, pointsAccount: "" };
+
+function toast(message, kind) {
+  const box = document.createElement("div");
+  box.className = "toast " + (kind || "");
+  box.textContent = message;
+  document.getElementById("toasts").appendChild(box);
+  setTimeout(() => box.remove(), kind === "err" ? 8000 : 4000);
+}
+
+async function api(path, options) {
+  const opts = Object.assign({ headers: { "Content-Type": "application/json" } }, options || {});
+  let response;
+  try {
+    response = await fetch(API + path, opts);
+  } catch (err) {
+    toast("请求失败：" + err.message, "err");
+    throw err;
+  }
+  const text = await response.text();
+  let payload = null;
+  try { payload = text ? JSON.parse(text) : null; } catch (e) { payload = null; }
+  if (!response.ok) {
+    const message = (payload && (payload.error || payload.message)) || ("HTTP " + response.status + " " + text.slice(0, 200));
+    toast(message, "err");
+    throw new Error(message);
+  }
+  if (payload && payload.ok === false) {
+    toast(payload.error || "操作失败", "err");
+    throw new Error(payload.error || "failed");
+  }
+  return payload ? payload.data : null;
+}
+
+function fmtTime(ms) {
+  if (!ms) return "-";
+  const d = new Date(ms);
+  const pad = n => String(n).padStart(2, "0");
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+function esc(value) {
+  return String(value == null ? "" : value).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+function stat(label, value) {
+  return `<div class="stat"><div class="k">${esc(label)}</div><div class="v">${esc(value)}</div></div>`;
+}
+
+// ---- tabs ----
+document.getElementById("tabs").addEventListener("click", event => {
+  const button = event.target.closest("button[data-tab]");
+  if (!button) return;
+  state.tab = button.dataset.tab;
+  document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("active", b === button));
+  document.querySelectorAll("main section").forEach(s => s.classList.toggle("active", s.id === "tab-" + state.tab));
+  loadTab(state.tab);
+});
+
+async function loadTab(tab) {
+  try {
+    if (tab === "overview") await loadOverview();
+    if (tab === "accounts") await loadAccounts();
+    if (tab === "models") await loadModels();
+    if (tab === "requests") await loadRequests();
+    if (tab === "points") await loadPoints();
+    if (tab === "logs") await loadLogs();
+    if (tab === "settings") await loadSettings();
+    if (tab === "test") await loadModels();
+  } catch (err) { /* toast already shown */ }
+}
+
+// ---- overview ----
+async function loadOverview() {
+  const data = await api("/overview");
+  document.getElementById("ver").textContent = "v" + data.version;
+  document.getElementById("prefix-hint").textContent = data.model_prefix + "/<模型 id>";
+  const m = data.metrics || {};
+  document.getElementById("overview-grid").innerHTML = [
+    stat("账号", data.accounts + "（可用 " + data.accounts_ready + "）"),
+    stat("模型", data.models),
+    stat("请求总数", m.requests),
+    stat("成功 / 失败", (m.success || 0) + " / " + (m.failures || 0)),
+    stat("流式请求", m.streamed),
+    stat("本地限流", m.local_limits),
+    stat("令牌续期", m.auth_retries),
+    stat("累计积分消耗", m.points),
+    stat("输入 / 输出 token", (m.tokens_in || 0) + " / " + (m.tokens_out || 0)),
+    stat("运行时长", Math.floor((data.uptime_seconds || 0) / 60) + " 分钟"),
+    stat("目录来源", data.catalog_source || "-"),
+    stat("目录时间", fmtTime(data.catalog_at)),
+  ].join("");
+}
+
+// ---- accounts ----
+async function loadAccounts() {
+  const accounts = await api("/accounts");
+  state.accounts = accounts || [];
+  document.getElementById("accounts-count").textContent = "共 " + state.accounts.length + " 个";
+  const body = document.getElementById("accounts-body");
+  if (!state.accounts.length) {
+    body.innerHTML = `<tr><td colspan="8" class="muted">还没有账号，用上面的登录方式添加</td></tr>`;
+    return;
+  }
+  body.innerHTML = state.accounts.map(a => {
+    const status = a.dead ? '<span class="pill err">已注销</span>'
+      : a.disabled ? '<span class="pill warn">已禁用</span>'
+      : (a.cooldown_until && a.cooldown_until > Date.now()) ? '<span class="pill warn">冷却中</span>'
+      : '<span class="pill ok">可用</span>';
+    const key = a.api_key_valid ? '<span class="pill ok">有效</span>' : '<span class="pill warn">待续期</span>';
+    return `<tr>
+      <td>${esc(a.alias)}<div class="muted" style="font-size:11px">${esc(a.source)}</div></td>
+      <td>${esc(a.nickname || "-")}<div class="muted" style="font-size:11px">${esc(a.phone || a.user_id || "")}</div></td>
+      <td>${esc(a.organization_code)}</td>
+      <td>${esc(a.device_name)}<div class="muted" style="font-size:11px">${esc(a.device_id.slice(0, 16))}…</div></td>
+      <td>${a.priority}</td>
+      <td>${key}<div class="muted" style="font-size:11px">${fmtTime(a.api_key_expires_at)}</div></td>
+      <td>${status}${a.last_error ? `<div class="muted" style="font-size:11px">${esc(a.last_error.slice(0, 60))}</div>` : ""}</td>
+      <td>
+        <button class="act ghost" data-act="refresh" data-id="${esc(a.id)}">续期</button>
+        <button class="act ghost" data-act="toggle" data-id="${esc(a.id)}" data-disabled="${a.disabled}">${a.disabled ? "启用" : "禁用"}</button>
+        <button class="act ghost" data-act="delete" data-id="${esc(a.id)}">删除</button>
+      </td></tr>`;
+  }).join("");
+}
+
+document.getElementById("accounts-body").addEventListener("click", async event => {
+  const button = event.target.closest("button[data-act]");
+  if (!button) return;
+  const id = button.dataset.id;
+  button.disabled = true;
+  try {
+    if (button.dataset.act === "refresh") {
+      await api("/accounts/refresh", { method: "POST", body: JSON.stringify({ id }) });
+      toast("已续期", "ok");
+    } else if (button.dataset.act === "toggle") {
+      const disabled = button.dataset.disabled === "true";
+      await api("/accounts/update", { method: "POST", body: JSON.stringify({ id, disabled: !disabled }) });
+      toast(disabled ? "已启用" : "已禁用", "ok");
+    } else if (button.dataset.act === "delete") {
+      if (!confirm("确认删除账号 " + id + "？")) return;
+      await api("/accounts/delete", { method: "POST", body: JSON.stringify({ id }) });
+      toast("已删除", "ok");
+    }
+    await loadAccounts();
+  } catch (err) { /* toast shown */ } finally { button.disabled = false; }
+});
+
+document.getElementById("btn-login-password").addEventListener("click", async event => {
+  const phone = document.getElementById("login-phone").value.trim();
+  const password = document.getElementById("login-password").value;
+  if (!phone || !password) { toast("请填写手机号与密码", "err"); return; }
+  event.target.disabled = true;
+  try {
+    const account = await api("/login/password", { method: "POST", body: JSON.stringify({ phone, password }) });
+    toast("登录成功：" + account.alias, "ok");
+    await loadAccounts();
+  } catch (err) { /* shown */ } finally { event.target.disabled = false; }
+});
+
+document.getElementById("btn-captcha").addEventListener("click", async event => {
+  const phone = document.getElementById("login-phone").value.trim();
+  if (!phone) { toast("请先填写手机号", "err"); return; }
+  event.target.disabled = true;
+  try {
+    const challenge = await api("/login/captcha", { method: "POST", body: JSON.stringify({ phone }) });
+    state.captcha = challenge.token;
+    document.getElementById("captcha-box").style.display = "block";
+    document.getElementById("captcha-img").src = challenge.image;
+    document.getElementById("captcha-hint").textContent = "已获取，请拖动滑块";
+    toast("图形验证码已获取", "ok");
+  } catch (err) { /* shown */ } finally { event.target.disabled = false; }
+});
+
+document.getElementById("captcha-angle").addEventListener("input", event => {
+  document.getElementById("captcha-angle-label").textContent = event.target.value;
+  const img = document.getElementById("captcha-img");
+  img.style.transform = "rotate(" + event.target.value + "deg)";
+});
+
+document.getElementById("btn-send-sms").addEventListener("click", async event => {
+  const phone = document.getElementById("login-phone").value.trim();
+  if (!state.captcha) { toast("请先获取图形验证码", "err"); return; }
+  const angle = Number(document.getElementById("captcha-angle").value);
+  event.target.disabled = true;
+  try {
+    await api("/login/sms", { method: "POST", body: JSON.stringify({ phone, captcha_token: state.captcha, angle }) });
+    document.getElementById("sms-hint").textContent = "已发送";
+    toast("短信验证码已发送", "ok");
+  } catch (err) { /* shown */ } finally { event.target.disabled = false; }
+});
+
+document.getElementById("btn-login-sms").addEventListener("click", async event => {
+  const phone = document.getElementById("login-phone").value.trim();
+  const code = document.getElementById("login-code").value.trim();
+  if (!code) { toast("请填写短信验证码", "err"); return; }
+  event.target.disabled = true;
+  try {
+    const account = await api("/login/sms/verify", { method: "POST", body: JSON.stringify({ phone, code }) });
+    toast("登录成功：" + account.alias, "ok");
+    await loadAccounts();
+  } catch (err) { /* shown */ } finally { event.target.disabled = false; }
+});
+
+document.getElementById("btn-login-token").addEventListener("click", async event => {
+  const raw = document.getElementById("login-token").value.trim();
+  if (!raw) { toast("请粘贴登录态", "err"); return; }
+  let payload = { authorization: raw };
+  if (raw.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(raw);
+      payload = {
+        authorization: parsed.authorization || parsed.access_token || parsed.accessToken,
+        organization_code: parsed.organization_code || parsed.organizationCode || "",
+        alias: parsed.alias || "",
+      };
+    } catch (err) { toast("JSON 解析失败：" + err.message, "err"); return; }
+  }
+  if (!payload.authorization) { toast("缺少 authorization", "err"); return; }
+  event.target.disabled = true;
+  try {
+    const account = await api("/login/token", { method: "POST", body: JSON.stringify(payload) });
+    toast("已导入：" + account.alias, "ok");
+    await loadAccounts();
+  } catch (err) { /* shown */ } finally { event.target.disabled = false; }
+});
+
+// ---- models ----
+async function loadModels() {
+  const data = await api("/models");
+  state.models = data.models || [];
+  document.getElementById("models-meta").textContent =
+    `前缀 ${data.prefix}/　来源 ${data.source || "-"}　更新于 ${fmtTime(data.fetched_at)}　共 ${data.total} 个`;
+  document.getElementById("models-body").innerHTML = state.models.map(m =>
+    `<tr><td>${esc(m.id)}</td><td>${esc(m.upstream_id)}</td><td>${esc(m.display_name)}</td>
+     <td>${m.context || "-"}</td><td>${m.max_output || "-"}</td></tr>`).join("")
+    || `<tr><td colspan="5" class="muted">目录为空</td></tr>`;
+  const select = document.getElementById("test-model");
+  select.innerHTML = state.models.map(m => `<option value="${esc(m.id)}">${esc(m.id)}</option>`).join("");
+}
+document.getElementById("btn-models-refresh").addEventListener("click", async event => {
+  event.target.disabled = true;
+  try { await api("/models/refresh", { method: "POST" }); await loadModels(); toast("模型目录已刷新", "ok"); }
+  catch (err) { /* shown */ } finally { event.target.disabled = false; }
+});
+
+// ---- requests ----
+async function loadRequests() {
+  const rows = await api("/requests");
+  document.getElementById("requests-body").innerHTML = (rows || []).map(r => {
+    const statusClass = r.status >= 200 && r.status < 300 ? "ok" : (r.status >= 500 ? "err" : "warn");
+    return `<tr>
+      <td>${fmtTime(r.at)}</td><td>${esc(r.account)}</td><td>${esc(r.model)}</td>
+      <td>${r.stream ? "是" : "否"}</td><td><span class="pill ${statusClass}">${r.status}</span></td>
+      <td>${r.ttft_ms || 0}ms</td><td>${r.total_ms || 0}ms</td>
+      <td>${r.prompt_tokens || 0}</td><td>${r.output_tokens || 0}</td><td>${r.cached_tokens || 0}</td>
+      <td>${r.points || 0}</td><td class="muted">${esc((r.error || "").slice(0, 80))}</td></tr>`;
+  }).join("") || `<tr><td colspan="12" class="muted">暂无请求</td></tr>`;
+}
+
+// ---- points ----
+async function loadPoints() {
+  if (!state.accounts.length) await loadAccounts();
+  const select = document.getElementById("points-account");
+  if (!select.options.length) {
+    select.innerHTML = state.accounts.map(a => `<option value="${esc(a.id)}">${esc(a.alias)}</option>`).join("");
+  }
+  if (!state.pointsAccount && select.options.length) state.pointsAccount = select.value;
+  if (!state.pointsAccount) {
+    document.getElementById("points-balance").innerHTML = `<div class="muted">没有账号</div>`;
+    return;
+  }
+  const data = await api("/points?id=" + encodeURIComponent(state.pointsAccount));
+  const p = data.points || {};
+  const balance = p.balance || {};
+  document.getElementById("points-balance").innerHTML = [
+    stat("总积分", balance.total_points != null ? balance.total_points : "-"),
+    stat("组织总积分", balance.organization_total_points != null ? balance.organization_total_points : "-"),
+    stat("过期配额数", (balance.expiring_quota_details || []).length),
+    stat("余额错误", p.balance_error || "无"),
+  ].join("");
+  const today = p.today || {};
+  document.getElementById("points-today").innerHTML = [
+    stat("今日登录奖励", today.gift_points || 0),
+    stat("今日任务奖励", today.task_points || 0),
+    stat("今日模型消耗", today.consumed_points || 0),
+    stat("最近领取日", today.last_claimed_date || "-"),
+  ].join("");
+  document.getElementById("tasks-body").innerHTML = (p.tasks || []).map(t => {
+    const claimable = t.status === "PENDING" && t.reward_status === "PENDING" && t.code !== "first_ai_work";
+    return `<tr>
+      <td>${esc(t.title || t.code)}<div class="muted" style="font-size:11px">${esc(t.code)}</div></td>
+      <td>${t.points || 0}</td>
+      <td><span class="pill ${t.status === "COMPLETED" ? "ok" : "warn"}">${esc(t.status)}</span></td>
+      <td><span class="pill ${t.reward_status === "GRANTED" ? "ok" : ""}">${esc(t.reward_status)}</span></td>
+      <td>${claimable ? `<button class="act" data-code="${esc(t.code)}">领取</button>` : '<span class="muted">-</span>'}</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="5" class="muted">暂无任务</td></tr>`;
+  document.getElementById("records-body").innerHTML = (p.records || []).map(r => {
+    const amount = Number(r.amount || 0);
+    return `<tr><td>${esc(r.created_at)}</td><td>${esc(r.business_type)}</td>
+      <td style="color:${amount < 0 ? "var(--err)" : "var(--ok)"}">${amount}</td>
+      <td>${esc(r.description || r.label || "")}</td></tr>`;
+  }).join("") || `<tr><td colspan="4" class="muted">暂无流水</td></tr>`;
+  if (p.records_error) toast(p.records_error, "err");
+  if (p.balance_error) toast(p.balance_error, "err");
+}
+
+document.getElementById("points-account").addEventListener("change", event => {
+  state.pointsAccount = event.target.value;
+  loadPoints();
+});
+document.getElementById("btn-points-reload").addEventListener("click", () => loadPoints());
+document.getElementById("btn-claim-gift").addEventListener("click", async event => {
+  event.target.disabled = true;
+  try {
+    const gift = await api("/points/claim", { method: "POST", body: JSON.stringify({ id: state.pointsAccount }) });
+    toast(gift.granted ? ("到账 " + gift.point_amount + " 积分") : (gift.message || "今日已领取"), gift.granted ? "ok" : "");
+    await loadPoints();
+  } catch (err) { /* shown */ } finally { event.target.disabled = false; }
+});
+document.getElementById("tasks-body").addEventListener("click", async event => {
+  const button = event.target.closest("button[data-code]");
+  if (!button) return;
+  button.disabled = true;
+  try {
+    const result = await api("/points/task", { method: "POST", body: JSON.stringify({ id: state.pointsAccount, code: button.dataset.code }) });
+    toast("领取成功，到账 " + result.points + " 积分", "ok");
+    await loadPoints();
+  } catch (err) { /* shown */ } finally { button.disabled = false; }
+});
+document.getElementById("btn-claim-all").addEventListener("click", async event => {
+  event.target.disabled = true;
+  try {
+    const buttons = Array.from(document.querySelectorAll("#tasks-body button[data-code]"));
+    for (const button of buttons) {
+      try {
+        const result = await api("/points/task", { method: "POST", body: JSON.stringify({ id: state.pointsAccount, code: button.dataset.code }) });
+        toast(button.dataset.code + " 到账 " + result.points, "ok");
+      } catch (err) { /* shown */ }
+    }
+    await loadPoints();
+  } finally { event.target.disabled = false; }
+});
+
+// ---- logs ----
+async function loadLogs() {
+  const rows = await api("/logs");
+  document.getElementById("logs-body").innerHTML = (rows || []).map(r => {
+    const cls = r.level === "error" ? "err" : r.level === "warn" ? "warn" : "";
+    return `<tr><td>${fmtTime(r.at)}</td><td><span class="pill ${cls}">${esc(r.level)}</span></td>
+      <td>${esc(r.scope)}</td><td style="white-space:normal">${esc(r.message)}</td></tr>`;
+  }).join("") || `<tr><td colspan="4" class="muted">暂无日志</td></tr>`;
+}
+
+// ---- settings ----
+async function loadSettings() {
+  const cfg = await api("/settings");
+  document.getElementById("set-rpm").value = cfg.rpm;
+  document.getElementById("set-burst").value = cfg.burst;
+  document.getElementById("set-cooldown").value = cfg.cooldown_seconds;
+  document.getElementById("set-timeout").value = cfg.request_timeout_seconds;
+  document.getElementById("set-attempts").value = cfg.max_attempts;
+  document.getElementById("set-proxy").value = cfg.proxy_url || "";
+  document.getElementById("set-points").checked = !!cfg.points_logging;
+  document.getElementById("set-daily").checked = !!cfg.daily_points_enabled;
+  document.getElementById("set-debug").checked = !!cfg.debug_dump;
+  document.getElementById("settings-json").textContent = JSON.stringify(cfg, null, 2);
+}
+document.getElementById("btn-save-settings").addEventListener("click", async event => {
+  event.target.disabled = true;
+  try {
+    const patch = {
+      rpm: Number(document.getElementById("set-rpm").value),
+      burst: Number(document.getElementById("set-burst").value),
+      cooldown_seconds: Number(document.getElementById("set-cooldown").value),
+      request_timeout_seconds: Number(document.getElementById("set-timeout").value),
+      max_attempts: Number(document.getElementById("set-attempts").value),
+      proxy_url: document.getElementById("set-proxy").value.trim(),
+      points_logging: document.getElementById("set-points").checked,
+      daily_points_enabled: document.getElementById("set-daily").checked,
+      debug_dump: document.getElementById("set-debug").checked,
+    };
+    const cfg = await api("/settings", { method: "POST", body: JSON.stringify(patch) });
+    document.getElementById("settings-json").textContent = JSON.stringify(cfg, null, 2);
+    toast("已保存", "ok");
+  } catch (err) { /* shown */ } finally { event.target.disabled = false; }
+});
+
+// ---- test chat ----
+document.getElementById("btn-test").addEventListener("click", async event => {
+  event.target.disabled = true;
+  const output = document.getElementById("test-output");
+  output.textContent = "请求中…";
+  try {
+    const result = await api("/test/chat", {
+      method: "POST",
+      body: JSON.stringify({
+        model: document.getElementById("test-model").value,
+        prompt: document.getElementById("test-prompt").value,
+        max_tokens: Number(document.getElementById("test-max").value) || 256,
+      }),
+    });
+    const response = result.response || {};
+    const choice = (response.choices || [{}])[0];
+    const message = choice.message || {};
+    output.textContent = [
+      "账号: " + (result.account || "-") + "    耗时: " + result.elapsed + "ms",
+      "model: " + (response.model || result.model),
+      "finish_reason: " + (choice.finish_reason || "-"),
+      "usage: " + JSON.stringify(response.usage || {}),
+      "",
+      message.reasoning_content ? "[reasoning]\n" + message.reasoning_content + "\n" : "",
+      message.content || "(空响应)",
+    ].join("\n");
+  } catch (err) {
+    output.textContent = "失败：" + err.message;
+  } finally { event.target.disabled = false; }
+});
+
+document.getElementById("btn-refresh-all").addEventListener("click", () => loadTab(state.tab));
+
+// boot
+(async () => {
+  try { await loadOverview(); } catch (err) { /* shown */ }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+# build output
+/dist/
+# local plugin state
+/plugin-data/
+*.log
+*.h
+
+# stray executables from `go build ./...`
+/magic2api.exe
+/magic2api
