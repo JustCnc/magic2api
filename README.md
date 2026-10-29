@@ -7,6 +7,9 @@
 - 上游资产/账号网关：`https://i-magic-service.letsmagic.cn/api/v1/*`（`authorization` + `organization-code`）
 - 上游账号服务：`https://i-keewood-service.teamshare.cn/v4/*`、`/captcha/*`
 - 逆向结论与证据：[`docs/REVERSE_ENGINEERING.md`](docs/REVERSE_ENGINEERING.md)
+- 实测记录：[`docs/EVIDENCE.md`](docs/EVIDENCE.md)
+- 配置示例：[`config.example.yaml`](config.example.yaml)
+- 发版流程：[`RELEASING.md`](RELEASING.md)
 
 ## 特性
 
@@ -149,8 +152,17 @@ CGO_ENABLED=0 go test ./...
 ```
 
 发布由 GitHub Actions 完成：推送 tag `v<pluginVersion>`（版本号唯一来源是 `schema.go` 的 `pluginVersion`），
-`release.yml` 会校验 tag 与 `pluginVersion` 一致，构建 `linux/amd64`、`linux/arm64`、`windows/amd64`，
-产出 `magic2api_<version>_<goos>_<goarch>.zip` 与 `checksums.txt` 并上传到 Release。
+再发布正式 Release（非 draft / 非 prerelease）。`release.yml` 会：
+
+1. 校验 tag 是 `v<点分数字>`、与 `pluginVersion` 一致、`providerKey` 仍是 `magic2api`；
+2. 构建 `linux/amd64`、`linux/arm64`、`windows/amd64` 三个目标，并用 `nm`/`objdump`
+   校验 `cliproxyPluginCall/Free/Shutdown` 三个导出符号；
+3. 产出插件商店资产 `magic2api_<version>_<goos>_<goarch>.zip`（zip 根目录只有一个动态库）、
+   裸动态库、`magic2api-<version>-linux.tar.gz`、`checksums.txt`（三个 zip）与 `SHA256SUMS`（全部资产）；
+4. 自动生成 `RELEASE_NOTES.md`，并在 Release 正文为空时写入；
+5. 把资产上传到 Release，并附 workflow artifact 与 job summary。
+
+完整的发版与校验步骤见 [`RELEASING.md`](RELEASING.md)。
 
 ## 实现要点（与上游对齐）
 

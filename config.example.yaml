@@ -1,0 +1,53 @@
+# Magic2API 配置示例
+#
+# 宿主键（enabled / priority）由 CPA 注入；下面是插件自己的配置。
+# 只写需要的键即可，其余走默认值。
+plugins:
+  enabled: true
+  dir: "plugins"
+  configs:
+    magic2api:
+      enabled: true
+      priority: 3
+      data_dir: "/CLIProxyAPI/plugin-data/magic2api"
+
+      # 上游网关（从 Magic 0.0.19 桌面端 / web 产物得到）
+      # 模型网关与资产网关共用 base_url；登录/验证码/user-info 在 account_base_url
+      base_url: "https://i-magic-service.letsmagic.cn"
+      account_base_url: "https://i-keewood-service.teamshare.cn"
+
+      # 方式 A：直接放主账号（authorization 是桌面端 JWT，organization_code 必须同时给）
+      # JWT 有效期 30 天且上游没有刷新接口，过期需重新登录/导出。
+      authorization: ""
+      organization_code: ""
+      device_id: ""
+      device_name: ""
+      credential_alias: "default"
+      credential_priority: 10
+
+      # 方式 B：账号目录（每个 *.json 一个账号，文件名即别名；删文件即移出池子）
+      accounts_dir: ""
+      import_interval_seconds: 30
+
+      # 模型目录：对外暴露为 <model_prefix>/<上游 id>
+      model_prefix: "magic"
+      refresh_seconds: 1800
+      model_denylist: []
+
+      # 执行
+      max_attempts: 3
+      # 单账号本地令牌桶：超限返回本地 429 让宿主换号
+      rpm: 30
+      burst: 20
+      # 上游可重试错误后的冷却秒数
+      cooldown_seconds: 60
+      # 单次请求预算（非流式所有尝试共享；流式作为空闲超时）
+      request_timeout_seconds: 300
+
+      # 积分：请求结束后回查流水回填消耗；后台领取每日登录积分与新人任务
+      points_logging: true
+      daily_points_enabled: true
+
+      # 出站代理（留空直连），例如 http://127.0.0.1:7897
+      proxy_url: ""
+      debug_dump: false

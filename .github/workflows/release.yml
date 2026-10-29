@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to build and upload (e.g. v0.1.0)"
+        description: "Release tag to build and upload (e.g. v0.1.4)"
         required: true
         type: string
 
@@ -22,7 +22,7 @@ jobs:
   release:
     name: Build and publish plugin binaries
     # Ubuntu 22.04 keeps the glibc baseline older than ubuntu-latest (24.04),
-    # so the produced .so loads on more CPA hosts.
+    # so the resulting Linux shared libraries load on more CPA hosts.
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     steps:
@@ -32,20 +32,13 @@ jobs:
           ref: ${{ github.event.release.tag_name || github.event.inputs.tag }}
           fetch-depth: 0
 
-      - name: Resolve release tag and version
+      - name: Resolve release tag
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
         run: |
           set -euo pipefail
           test -n "$RELEASE_TAG"
-          VERSION="${RELEASE_TAG#v}"
-          DECLARED="$(grep -oE 'pluginVersion[[:space:]]*=[[:space:]]*"[^"]+"' schema.go | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
-          if [ "$VERSION" != "$DECLARED" ]; then
-            echo "tag $RELEASE_TAG does not match pluginVersion $DECLARED in schema.go" >&2
-            exit 1
-          fi
           echo "TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -61,41 +54,245 @@ jobs:
             gcc-aarch64-linux-gnu \
             libc6-dev-arm64-cross \
             gcc-mingw-w64-x86-64 \
+            binutils-aarch64-linux-gnu \
+            binutils-mingw-w64-x86-64 \
             zip unzip
 
       - name: Run tests
         run: |
+          set -euo pipefail
           gofmt -l . | tee /tmp/fmt.txt
           test ! -s /tmp/fmt.txt
           CGO_ENABLED=0 go vet ./...
           CGO_ENABLED=0 go test ./...
 
-      - name: Build shared libraries
+      - name: Build plugin binaries
         run: |
           set -euo pipefail
-          mkdir -p out
-          build() {
-            local goos="$1" goarch="$2" cc="$3" ext="$4"
-            echo "==> $goos/$goarch"
-            CGO_ENABLED=1 GOOS="$goos" GOARCH="$goarch" CC="$cc" \
-              go build -buildmode=c-shared -trimpath -ldflags="-s -w" -o "out/magic2api.$ext" .
-            rm -f out/magic2api.h
-            (cd out && zip -q "magic2api_${VERSION}_${goos}_${goarch}.zip" "magic2api.$ext")
-            rm -f "out/magic2api.$ext"
-          }
-          build linux amd64 gcc so
-          build linux arm64 aarch64-linux-gnu-gcc so
-          build windows amd64 x86_64-w64-mingw32-gcc dll
-          ls -l out
+          mkdir -p \
+            dist/plugins/linux/amd64 \
+            dist/plugins/linux/arm64 \
+            dist/plugins/windows/amd64
 
-      - name: Write checksums
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 CC=gcc \
+            go build -buildmode=c-shared -trimpath -ldflags='-s -w' \
+            -o dist/plugins/linux/amd64/magic2api.so .
+
+          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc \
+            go build -buildmode=c-shared -trimpath -ldflags='-s -w' \
+            -o dist/plugins/linux/arm64/magic2api.so .
+
+          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 CC=x86_64-w64-mingw32-gcc \
+            go build -buildmode=c-shared -trimpath -ldflags='-s -w' \
+            -o dist/plugins/windows/amd64/magic2api.dll .
+
+          rm -f dist/plugins/linux/*/magic2api.h dist/plugins/windows/*/magic2api.h
+
+          for bin in \
+            dist/plugins/linux/amd64/magic2api.so \
+            dist/plugins/linux/arm64/magic2api.so \
+            dist/plugins/windows/amd64/magic2api.dll; do
+            echo "== $bin"
+            file "$bin"
+          done
+
+          # Do not use grep -q with pipefail: grep may close the pipe early and
+          # make nm/objdump die with SIGPIPE even though the symbol is present.
+          nm -D --defined-only dist/plugins/linux/amd64/magic2api.so \
+            | grep -E 'cliproxyPlugin(Call|Free|Shutdown)$' >/dev/null
+          aarch64-linux-gnu-nm -D --defined-only dist/plugins/linux/arm64/magic2api.so \
+            | grep -E 'cliproxyPlugin(Call|Free|Shutdown)$' >/dev/null
+          x86_64-w64-mingw32-objdump -p dist/plugins/windows/amd64/magic2api.dll \
+            | grep -E 'cliproxyPlugin(Call|Free|Shutdown)$' >/dev/null
+
+      - name: Package release assets
         run: |
-          cd out
-          sha256sum *.zip > checksums.txt
-          cat checksums.txt
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          VERSION="${VERSION//\//-}"
+          test -n "$VERSION"
 
-      - name: Upload release assets
+          if ! [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+            echo "::error::release tag $TAG must be v<dotted-numeric> for the plugin store"
+            exit 1
+          fi
+
+          PLUGIN_ID=$(sed -n 's/.*providerKey *= *"\([^"]*\)".*/\1/p' schema.go | head -1)
+          PLUGIN_VERSION=$(sed -n 's/.*pluginVersion = "\([^"]*\)".*/\1/p' schema.go | head -1)
+
+          if [ "$PLUGIN_ID" != "magic2api" ]; then
+            echo "::error::providerKey '$PLUGIN_ID' does not match store id 'magic2api'"
+            exit 1
+          fi
+          if [ -z "$PLUGIN_VERSION" ] || [ "$PLUGIN_VERSION" != "$VERSION" ]; then
+            echo "::error::tag $TAG does not match pluginVersion '$PLUGIN_VERSION'; bump schema.go before releasing"
+            exit 1
+          fi
+
+          STAGE="dist/stage/magic2api-$VERSION"
+          RELEASE_DIR="$PWD/dist/release"
+          rm -rf "$STAGE" "$RELEASE_DIR"
+          mkdir -p \
+            "$STAGE/plugins/linux/amd64" \
+            "$STAGE/plugins/linux/arm64" \
+            "$STAGE/plugins/windows/amd64" \
+            "$RELEASE_DIR"
+
+          cp dist/plugins/linux/amd64/magic2api.so "$STAGE/plugins/linux/amd64/"
+          cp dist/plugins/linux/arm64/magic2api.so "$STAGE/plugins/linux/arm64/"
+          cp dist/plugins/windows/amd64/magic2api.dll "$STAGE/plugins/windows/amd64/"
+          cp README.md config.example.yaml "$STAGE/"
+          cp docs/REVERSE_ENGINEERING.md docs/EVIDENCE.md "$STAGE/"
+
+          (
+            cd "$STAGE"
+            find . -type f ! -name SHA256SUMS -print0 \
+              | sort -z \
+              | xargs -0 sha256sum > SHA256SUMS
+          )
+
+          cp dist/plugins/linux/amd64/magic2api.so "dist/release/magic2api-$VERSION-linux-amd64.so"
+          cp dist/plugins/linux/arm64/magic2api.so "dist/release/magic2api-$VERSION-linux-arm64.so"
+          cp dist/plugins/windows/amd64/magic2api.dll "dist/release/magic2api-$VERSION-windows-amd64.dll"
+          tar -C dist/stage -czf "dist/release/magic2api-$VERSION-linux.tar.gz" "magic2api-$VERSION"
+
+          # CPA plugin store assets. The library must sit at the zip root and keep
+          # the plugin id as its filename.
+          (
+            cd dist/plugins/linux/amd64
+            zip -q -j "$RELEASE_DIR/${PLUGIN_ID}_${VERSION}_linux_amd64.zip" magic2api.so
+          )
+          (
+            cd dist/plugins/linux/arm64
+            zip -q -j "$RELEASE_DIR/${PLUGIN_ID}_${VERSION}_linux_arm64.zip" magic2api.so
+          )
+          (
+            cd dist/plugins/windows/amd64
+            zip -q -j "$RELEASE_DIR/${PLUGIN_ID}_${VERSION}_windows_amd64.zip" magic2api.dll
+          )
+
+          (
+            cd "$RELEASE_DIR"
+            sha256sum ./*.so ./*.dll ./*.tar.gz ./*.zip > SHA256SUMS
+            sha256sum "${PLUGIN_ID}_"*.zip > checksums.txt
+          )
+
+          for z in "$RELEASE_DIR"/*.zip; do
+            echo "== $z"
+            unzip -l "$z"
+            count=$(unzip -Z1 "$z" | grep -E '\.(so|dll|dylib)$' | wc -l || true)
+            if [ "$count" -ne 1 ]; then
+              echo "::error::$z must contain exactly one dynamic library at its root"
+              exit 1
+            fi
+          done
+
+          ls -lh "$RELEASE_DIR"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: magic2api-${{ github.event.release.tag_name || github.event.inputs.tag }}-assets
+          path: dist/release/*
+          if-no-files-found: error
+
+      - name: Generate release notes
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "$TAG" out/*.zip out/checksums.txt --clobber
+          set -euo pipefail
+          NOTES="dist/release/RELEASE_NOTES.md"
+
+          if ! gh api --method POST \
+              -H "Accept: application/vnd.github+json" \
+              "/repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+              -f tag_name="$TAG" \
+              --jq .body > "$NOTES"; then
+            echo "::warning::GitHub generate-notes failed; falling back to git log"
+            PREV=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+            if [ -n "$PREV" ]; then
+              git log --no-merges --pretty='- %s (%h)' "${PREV}..${TAG}" > "$NOTES"
+            else
+              git log --no-merges --pretty='- %s (%h)' "$TAG" > "$NOTES"
+            fi
+          fi
+
+          if [ ! -s "$NOTES" ] || [ "$(cat "$NOTES")" = "null" ]; then
+            echo "No changes recorded for $TAG." > "$NOTES"
+          fi
+
+          {
+            echo "## 更新内容"
+            echo
+            cat "$NOTES"
+            echo
+            echo "## 资产"
+            echo
+            echo "- \`magic2api_${TAG#v}_windows_amd64.zip\` / \`_linux_amd64.zip\` / \`_linux_arm64.zip\`：插件商店资产，zip 根目录是动态库"
+            echo "- \`magic2api-${TAG#v}-*.so|dll\`：裸动态库"
+            echo "- \`magic2api-${TAG#v}-linux.tar.gz\`：含 README、配置示例与逆向/实测文档"
+            echo "- \`checksums.txt\`（三个 zip）/ \`SHA256SUMS\`（全部资产）"
+          } > "$NOTES.tmp"
+          mv "$NOTES.tmp" "$NOTES"
+          cat "$NOTES"
+
+      - name: Fill empty release body
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes-file dist/release/RELEASE_NOTES.md \
+              --verify-tag
+            exit 0
+          fi
+
+          BODY=$(gh release view "$TAG" --json body --jq .body)
+          if [ -z "$(printf '%s' "$BODY" | tr -d '[:space:]')" ]; then
+            gh release edit "$TAG" --notes-file dist/release/RELEASE_NOTES.md
+            echo "Filled empty release body with generated notes."
+          else
+            echo "Release body already has notes; leaving it unchanged."
+          fi
+
+      - name: Upload assets to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" \
+            dist/release/*.so \
+            dist/release/*.dll \
+            dist/release/*.tar.gz \
+            dist/release/*.zip \
+            dist/release/SHA256SUMS \
+            dist/release/checksums.txt \
+            dist/release/RELEASE_NOTES.md \
+            --clobber
+
+      - name: Write job summary
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo "## Release ${TAG:-unknown}"
+            echo
+            if ls dist/release/*.so dist/release/*.dll dist/release/*.tar.gz dist/release/*.zip >/dev/null 2>&1; then
+              echo "| Asset | Size |"
+              echo "| --- | --- |"
+              for f in dist/release/*.so dist/release/*.dll dist/release/*.tar.gz dist/release/*.zip; do
+                echo "| \`$(basename "$f")\` | $(du -h "$f" | cut -f1) |"
+              done
+              echo
+            fi
+            echo "## 更新内容"
+            echo
+            if [ -f dist/release/RELEASE_NOTES.md ]; then
+              cat dist/release/RELEASE_NOTES.md
+            else
+              echo "（未生成）"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

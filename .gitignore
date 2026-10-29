@@ -2,9 +2,13 @@
 /dist/
 # local plugin state
 /plugin-data/
-*.log
+# binaries never belong in the repo
+*.exe
+*.dll
+*.so
+*.dylib
 *.h
-
-# stray executables from `go build ./...`
-/magic2api.exe
-/magic2api
+*.log
+.DS_Store
+.pi/
+.tmp/
