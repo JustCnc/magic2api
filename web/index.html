@@ -8,8 +8,10 @@
   :root {
     color-scheme: light;
     --bg: #f5f6f8; --panel: #ffffff; --panel2: #f3f5f8; --line: #e2e6ee;
-    --text: #1e2430; --muted: #6b7280; --accent: #2f6bff; --ok: #0f9d58;
-    --warn: #a86700; --err: #d93025; --hover: #f7f9fc; --code: #f6f7f9;
+    --text: #1e2430; --muted: #6b7280; --accent: #2f6bff; --accent-soft: #eaf0ff;
+    --ok: #0f9d58; --ok-soft: #f0faf4; --warn: #a86700; --warn-soft: #fff8e6;
+    --err: #d93025; --err-soft: #fdf2f1; --hover: #f7f9fc; --code: #f6f7f9;
+    --shadow: 0 1px 2px rgba(20,30,50,.05), 0 10px 26px rgba(20,30,50,.07);
   }
   * { box-sizing: border-box; }
   body { margin: 0; font: 14px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
@@ -27,44 +29,127 @@
   section.active { display: block; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin: 12px 0; }
   .card h2 { font-size: 14px; margin: 0 0 10px; font-weight: 600; }
+  .card > .head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  .card > .head h2 { margin: 0; }
   .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
   .stat { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
   .stat .k { color: var(--muted); font-size: 12px; }
-  .stat .v { font-size: 20px; font-weight: 600; margin-top: 4px; word-break: break-all; }
+  .stat .v { font-size: 20px; font-weight: 600; margin-top: 4px; word-break: break-all; font-variant-numeric: tabular-nums; }
+  .stat .v small { font-size: 12px; font-weight: 400; color: var(--muted); }
+  .stat.accent { background: var(--accent-soft); border-color: #c9d9ff; }
+  .stat.accent .v { color: var(--accent); }
   .scroll { max-height: 460px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
   .scroll.sm { max-height: 300px; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-  th { position: sticky; top: 0; background: var(--panel2); color: var(--muted); font-weight: 500; z-index: 1; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: middle; }
+  th { position: sticky; top: 0; background: var(--panel2); color: var(--muted); font-weight: 500; z-index: 1; font-size: 12px; }
   tbody tr:hover { background: var(--hover); }
+  tbody tr:last-child td { border-bottom: 0; }
   .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line); }
-  .pill.ok { color: var(--ok); border-color: #b3ddc5; background: #f0faf4; }
-  .pill.warn { color: var(--warn); border-color: #ecd9a8; background: #fff8e6; }
-  .pill.err { color: var(--err); border-color: #f3c3c0; background: #fdf2f1; }
+  .pill.ok { color: var(--ok); border-color: #b3ddc5; background: var(--ok-soft); }
+  .pill.warn { color: var(--warn); border-color: #ecd9a8; background: var(--warn-soft); }
+  .pill.err { color: var(--err); border-color: #f3c3c0; background: var(--err-soft); }
+  .pill.info { color: var(--accent); border-color: #c9d9ff; background: var(--accent-soft); }
   button.act { background: var(--accent); color: #ffffff; border: 0; border-radius: 7px; padding: 6px 12px;
                cursor: pointer; font-size: 13px; }
   button.act.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
+  button.act.danger { background: transparent; border: 1px solid #f3c3c0; color: var(--err); }
   button.act:disabled { opacity: .5; cursor: not-allowed; }
+  button.act.sm { padding: 4px 9px; font-size: 12px; }
   input, textarea, select { background: var(--panel2); border: 1px solid var(--line); color: var(--text);
                             border-radius: 7px; padding: 7px 10px; font-size: 13px; width: 100%; font-family: inherit; }
+  input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
   textarea { min-height: 84px; resize: vertical; }
   .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
   .row > label { flex: 1 1 200px; }
   label span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+  label.inline { display: inline-flex; gap: 6px; align-items: center; color: var(--text); font-size: 13px; }
+  label.inline input[type=checkbox], .row input[type=checkbox] { width: auto; margin: 0; }
+  label.inline > span { display: inline; margin: 0; color: var(--text); }
   pre { margin: 0; padding: 10px; background: var(--code); border: 1px solid var(--line); border-radius: 8px; overflow: auto; max-height: 320px; font-size: 12px; }
   .toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 99; }
   .toast { padding: 9px 14px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line);
-           box-shadow: 0 6px 18px rgba(20, 30, 50, .10); font-size: 13px; max-width: 420px; }
-  .toast.ok { border-color: #b3ddc5; background: #f0faf4; }
-  .toast.err { border-color: #f3c3c0; background: #fdf2f1; }
+           box-shadow: var(--shadow); font-size: 13px; max-width: 420px; }
+  .toast.ok { border-color: #b3ddc5; background: var(--ok-soft); }
+  .toast.err { border-color: #f3c3c0; background: var(--err-soft); }
   .keybar { display: flex; gap: 10px; align-items: center; padding: 10px 18px; background: #fff8e6;
             border-bottom: 1px solid #ecd9a8; color: var(--warn); font-size: 13px; }
   .keybar input { max-width: 320px; }
   .muted { color: var(--muted); }
   .flex { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  label.inline { display: inline-flex; gap: 6px; align-items: center; color: var(--text); font-size: 13px; }
-  label.inline input[type=checkbox] { width: auto; margin: 0; }
   .spacer { flex: 1; }
+  .sub { color: var(--muted); font-size: 11px; }
+  .kv { display: grid; grid-template-columns: 96px 1fr; gap: 6px 12px; font-size: 13px; }
+  .kv .k { color: var(--muted); }
+  .section-title { font-size: 12px; color: var(--muted); margin: 6px 0 -2px; }
+  .note-box { background: var(--warn-soft); border: 1px solid #ecd9a8; color: var(--warn); border-radius: 8px; padding: 9px 12px; font-size: 12px; }
+
+  /* priority stepper */
+  .prio { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
+  .prio button { background: var(--panel); border: 0; padding: 2px 7px; cursor: pointer; color: var(--muted); font-size: 13px; line-height: 1.4; }
+  .prio button:hover { background: var(--hover); color: var(--text); }
+  .prio .val { min-width: 34px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 13px; }
+  .prio .val.top { color: var(--accent); }
+  .drag { cursor: grab; color: #b9c1cf; user-select: none; }
+
+  /* modal */
+  .backdrop { position: fixed; inset: 0; background: rgba(18,24,36,.42); display: none;
+              align-items: flex-start; justify-content: center; z-index: 60; padding: 48px 16px; overflow: auto; }
+  .backdrop.open { display: flex; }
+  .modal { width: 100%; max-width: 620px; background: var(--panel); border-radius: 14px;
+           border: 1px solid var(--line); box-shadow: var(--shadow); }
+  .modal.wide { max-width: 720px; }
+  .modal > header { position: static; display: flex; align-items: center; gap: 10px; padding: 15px 20px;
+                    border-bottom: 1px solid var(--line); background: var(--panel); border-radius: 14px 14px 0 0; }
+  .modal > header h3 { font-size: 15px; margin: 0; }
+  .modal > header .x { margin-left: auto; border: 0; background: transparent; cursor: pointer;
+                       color: var(--muted); font-size: 17px; line-height: 1; padding: 3px 7px; border-radius: 6px; }
+  .modal > header .x:hover { background: var(--hover); color: var(--text); }
+  .modal .body { padding: 16px 20px; display: grid; gap: 12px; }
+  .modal > footer { display: flex; gap: 10px; justify-content: flex-end; padding: 13px 20px;
+                    border-top: 1px solid var(--line); background: var(--panel2); border-radius: 0 0 14px 14px; }
+  .seg { display: inline-flex; background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 3px; gap: 3px; flex-wrap: wrap; }
+  .seg button { border: 0; background: transparent; padding: 6px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--muted); }
+  .seg button.active { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(20,30,50,.08); }
+  .pane { display: none; gap: 12px; }
+  .pane.active { display: grid; }
+
+  /* switch */
+  .switch { position: relative; display: inline-block; width: 38px; height: 22px; flex: 0 0 auto; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .track { position: absolute; inset: 0; background: #cfd6e4; border-radius: 999px; transition: .15s; cursor: pointer; }
+  .switch .track::after { content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%;
+                          background: #fff; top: 3px; left: 3px; transition: .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+  .switch input:checked + .track { background: var(--ok); }
+  .switch input:checked + .track::after { transform: translateX(16px); }
+
+  /* points */
+  .points-layout { display: grid; grid-template-columns: 300px 1fr; gap: 12px; align-items: start; }
+  @media (max-width: 900px) { .points-layout { grid-template-columns: 1fr; } }
+  .acct-list { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .acct-list .search { padding: 12px; border-bottom: 1px solid var(--line); }
+  .acct-item { display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; align-items: center;
+               padding: 11px 14px; cursor: pointer; border-bottom: 1px solid var(--line); border-left: 3px solid transparent; }
+  .acct-item:last-child { border-bottom: 0; }
+  .acct-item:hover { background: var(--hover); }
+  .acct-item.active { background: var(--accent-soft); border-left-color: var(--accent); }
+  .avatar { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center;
+            background: var(--panel2); color: var(--muted); font-weight: 600; font-size: 13px; border: 1px solid var(--line); }
+  .acct-item.active .avatar { background: #fff; color: var(--accent); border-color: #c9d9ff; }
+  .acct-item .name { font-size: 13px; font-weight: 600; }
+  .acct-item .meta { font-size: 11px; color: var(--muted); }
+  .acct-item .bal { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .acct-item .bal small { display: block; font-weight: 400; color: var(--muted); font-size: 11px; }
+  .tasks { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+  .task { border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: grid; gap: 6px; background: var(--panel); }
+  .task .t { font-size: 13px; font-weight: 600; }
+  .task .d { font-size: 11px; color: var(--muted); }
+  .task .foot { display: flex; align-items: center; gap: 8px; }
+  .task .reward { margin-left: auto; color: var(--accent); font-weight: 600; font-size: 13px; }
+  .empty { display: grid; place-items: center; gap: 8px; padding: 56px 20px; color: var(--muted); text-align: center; }
+  .empty .big { font-size: 32px; opacity: .45; }
+  .amount.plus { color: var(--ok); }
+  .amount.minus { color: var(--err); }
 </style>
 </head>
 <body>
@@ -84,9 +169,9 @@
 <nav id="tabs">
   <button data-tab="overview" class="active">概览</button>
   <button data-tab="accounts">账号</button>
+  <button data-tab="points">积分</button>
   <button data-tab="models">模型</button>
   <button data-tab="requests">请求</button>
-  <button data-tab="points">积分</button>
   <button data-tab="logs">日志</button>
   <button data-tab="settings">设置</button>
   <button data-tab="test">测试对话</button>
@@ -108,53 +193,87 @@
     </div>
   </section>
 
+  <!-- ============ 账号 ============ -->
   <section id="tab-accounts">
     <div class="card">
-      <h2>登录 / 添加账号</h2>
-      <div class="row">
-        <label><span>手机号</span><input id="login-phone" placeholder="13800000000" /></label>
-        <label><span>密码（手机号+密码登录，无需验证码）</span><input id="login-password" type="password" placeholder="密码" /></label>
-        <label style="flex:0 0 auto"><span>到期自动重登</span>
-          <label class="inline"><input type="checkbox" id="login-remember" /> 记住密码</label></label>
-        <button class="act" id="btn-login-password">密码登录</button>
+      <div class="head">
+        <h2>账号池</h2>
+        <span class="pill info" id="accounts-count">0 个</span>
+        <span class="muted" style="font-size:12px">优先级越大越先被选中，可直接在行内增减</span>
+        <span class="spacer"></span>
+        <button class="act ghost" id="btn-export-all">导出全部</button>
+        <button class="act" id="btn-add-account">＋ 添加账号</button>
       </div>
-      <div class="row" style="margin-top:12px">
-        <label><span>短信验证码登录：先获取图形验证码，拖动滑块把图片转正</span>
-          <div class="flex"><button class="act ghost" id="btn-captcha">获取图形验证码</button>
-          <span class="muted" id="captcha-hint">未获取</span></div>
-        </label>
+      <div class="row" style="margin-bottom:10px">
+        <label style="flex:2 1 240px"><span>搜索</span><input id="acct-search" placeholder="别名 / 手机号 / 用户 id" /></label>
+        <label style="flex:0 1 160px"><span>状态</span>
+          <select id="acct-filter">
+            <option value="">全部状态</option><option value="ok">可用</option>
+            <option value="relogin">需重登</option><option value="disabled">已禁用</option>
+            <option value="dead">已注销</option><option value="cooling">冷却中</option>
+          </select></label>
       </div>
-      <div id="captcha-box" style="display:none;margin-top:10px">
-        <div class="flex">
-          <img id="captcha-img" alt="captcha" style="width:170px;height:170px;border-radius:8px;border:1px solid var(--line)" />
-          <div style="flex:1;min-width:220px">
-            <label><span>旋转角度 <b id="captcha-angle-label">0</b>°</span>
-              <input id="captcha-angle" type="range" min="0" max="359" value="0" /></label>
-            <div class="flex" style="margin-top:8px">
-              <button class="act ghost" id="btn-send-sms">发送短信验证码</button>
-              <span class="muted" id="sms-hint"></span>
-            </div>
-            <div class="flex" style="margin-top:8px">
-              <input id="login-code" placeholder="6 位短信验证码" style="max-width:200px" />
-              <button class="act" id="btn-login-sms">短信登录</button>
-            </div>
+      <div class="scroll">
+        <table>
+          <thead><tr>
+            <th style="width:26px"></th><th style="width:104px">优先级</th><th>别名 / 来源</th><th>用户</th>
+            <th>设备</th><th>api-key</th><th>登录令牌</th><th>状态</th><th style="width:236px">操作</th>
+          </tr></thead>
+          <tbody id="accounts-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 积分 ============ -->
+  <section id="tab-points">
+    <div class="card">
+      <div class="head">
+        <h2>积分总览</h2>
+        <span class="muted" style="font-size:12px" id="points-fetched">—</span>
+        <span class="spacer"></span>
+        <button class="act ghost" id="btn-points-refresh">刷新全部</button>
+        <button class="act" id="btn-points-claim-all">一键领取全部账号</button>
+      </div>
+      <div class="grid" id="points-totals"></div>
+    </div>
+
+    <div class="card">
+      <div class="head">
+        <h2>定时领取</h2>
+        <span class="muted" style="font-size:12px">到点自动给每个账号领每日登录奖励和可领任务，失败每 30 分钟重试</span>
+        <span class="spacer"></span>
+        <button class="act ghost" id="btn-schedule-save">保存</button>
+      </div>
+      <div class="row" style="align-items:flex-end">
+        <label style="flex:0 0 200px"><span>自动领取</span>
+          <label class="inline"><label class="switch"><input type="checkbox" id="set-schedule-on" /><span class="track"></span></label>
+            <span id="schedule-state">已开启</span></label></label>
+        <label style="flex:0 0 160px"><span>每天执行时间</span><input id="set-schedule-time" placeholder="09:05" /></label>
+        <div style="flex:1 1 260px" class="kv">
+          <span class="k">下次执行</span><span id="schedule-next">—</span>
+          <span class="k">当前窗口</span><span id="schedule-window">—</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="points-layout">
+      <div class="acct-list">
+        <div class="search">
+          <input id="points-search" placeholder="搜索账号" />
+          <div class="sub" style="margin-top:8px" id="points-list-total">—</div>
+        </div>
+        <div id="points-list"></div>
+      </div>
+      <div id="points-detail">
+        <div class="card">
+          <div class="empty">
+            <div class="big">◔</div>
+            <div>左侧选一个账号，查看它的积分余额、任务与流水</div>
+            <div class="sub">选中后会记住，刷新页面仍停在这个账号</div>
           </div>
         </div>
       </div>
-      <div class="row" style="margin-top:12px">
-        <label><span>已有登录态（粘贴桌面端 JWT 或导出脚本输出）</span>
-          <textarea id="login-token" placeholder='{"authorization":"eyJ...","organization_code":"h70imn51gp0f"}'></textarea></label>
-        <button class="act" id="btn-login-token">导入</button>
-      </div>
-    </div>
-    <div class="card">
-      <div class="flex"><h2 style="margin:0">账号池 <span class="muted" id="accounts-count"></span></h2>
-        <span class="spacer"></span>
-        <button class="act ghost" id="btn-export-all">导出全部</button></div>
-      <div class="scroll"><table>
-        <thead><tr><th>别名</th><th>用户</th><th>组织</th><th>设备</th><th>优先级</th><th>api-key</th><th>登录令牌</th><th>状态</th><th>操作</th></tr></thead>
-        <tbody id="accounts-body"></tbody>
-      </table></div>
     </div>
   </section>
 
@@ -175,34 +294,6 @@
       <div class="scroll"><table>
         <thead><tr><th>时间</th><th>账号</th><th>模型</th><th>流</th><th>状态</th><th>首字</th><th>总耗时</th><th>输入</th><th>输出</th><th>缓存</th><th>积分</th><th>错误</th></tr></thead>
         <tbody id="requests-body"></tbody>
-      </table></div>
-    </div>
-  </section>
-
-  <section id="tab-points">
-    <div class="card">
-      <div class="flex"><h2 style="margin:0">账号</h2><span class="spacer"></span>
-        <select id="points-account" style="max-width:260px"></select>
-        <button class="act ghost" id="btn-points-reload">刷新</button></div>
-    </div>
-    <div class="card"><h2>余额</h2><div class="grid" id="points-balance"></div></div>
-    <div class="card">
-      <div class="flex"><h2 style="margin:0">每日积分 / 登录奖励</h2><span class="spacer"></span>
-        <button class="act" id="btn-claim-gift">领取每日登录积分</button></div>
-      <div class="grid" id="points-today" style="margin-top:10px"></div>
-    </div>
-    <div class="card">
-      <div class="flex"><h2 style="margin:0">新人任务板</h2><span class="spacer"></span>
-        <button class="act ghost" id="btn-claim-all">一键领取可领任务</button></div>
-      <div class="scroll sm"><table>
-        <thead><tr><th>任务</th><th>积分</th><th>状态</th><th>奖励</th><th>操作</th></tr></thead>
-        <tbody id="tasks-body"></tbody>
-      </table></div>
-    </div>
-    <div class="card"><h2>积分流水</h2>
-      <div class="scroll"><table>
-        <thead><tr><th>时间</th><th>类型</th><th>变动</th><th>说明</th></tr></thead>
-        <tbody id="records-body"></tbody>
       </table></div>
     </div>
   </section>
@@ -229,6 +320,7 @@
       <div class="row" style="margin-top:12px">
         <label style="flex:0 0 auto"><span>积分回填</span><input id="set-points" type="checkbox" style="width:auto" /></label>
         <label style="flex:0 0 auto"><span>自动领积分</span><input id="set-daily" type="checkbox" style="width:auto" /></label>
+        <label style="flex:0 0 160px"><span>每天领取时间</span><input id="set-schedule" placeholder="09:05" /></label>
         <label style="flex:0 0 auto"><span>调试日志</span><input id="set-debug" type="checkbox" style="width:auto" /></label>
         <button class="act" id="btn-save-settings">保存</button>
       </div>
@@ -250,6 +342,126 @@
   </section>
 </main>
 
+<!-- ============ 添加账号 ============ -->
+<div class="backdrop" id="modal-add">
+  <div class="modal wide">
+    <header>
+      <h3>添加账号</h3>
+      <span class="sub">登录成功后自动铸造 api-key 并写入账号池</span>
+      <button class="x" data-close="modal-add">✕</button>
+    </header>
+    <div class="body">
+      <div class="seg" id="add-seg">
+        <button class="active" data-pane="pane-pwd">手机号 + 密码</button>
+        <button data-pane="pane-sms">短信验证码</button>
+        <button data-pane="pane-jwt">粘贴登录态</button>
+        <button data-pane="pane-file">导入文件</button>
+      </div>
+
+      <div class="pane active" id="pane-pwd">
+        <div class="row">
+          <label><span>手机号</span><input id="login-phone" placeholder="13800000000" /></label>
+          <label><span>密码</span><input id="login-password" type="password" placeholder="账号密码（无需验证码）" /></label>
+        </div>
+        <label class="inline"><input type="checkbox" id="login-remember" /> 记住密码，到期前自动重新登录</label>
+        <div class="note-box">勾选后密码以明文存放在插件数据目录，跟 token 同级；可在「编辑」里随时关掉。</div>
+      </div>
+
+      <div class="pane" id="pane-sms">
+        <div class="row">
+          <label><span>手机号</span><input id="sms-phone" placeholder="13800000000" /></label>
+          <label style="flex:0 0 220px"><span>图形验证码</span>
+            <div class="flex"><button class="act ghost sm" id="btn-captcha">获取</button>
+              <span class="muted" id="captcha-hint">未获取</span></div></label>
+        </div>
+        <div id="captcha-box" style="display:none">
+          <div class="flex">
+            <img id="captcha-img" alt="captcha" style="width:150px;height:150px;border-radius:8px;border:1px solid var(--line)" />
+            <div style="flex:1;min-width:220px">
+              <label><span>旋转角度 <b id="captcha-angle-label">0</b>°</span>
+                <input id="captcha-angle" type="range" min="0" max="359" value="0" /></label>
+              <div class="flex" style="margin-top:8px">
+                <button class="act ghost sm" id="btn-send-sms">发送短信验证码</button>
+                <span class="muted" id="sms-hint"></span>
+              </div>
+              <div class="flex" style="margin-top:8px">
+                <input id="login-code" placeholder="6 位短信验证码" style="max-width:170px" />
+                <button class="act" id="btn-login-sms">短信登录</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pane" id="pane-jwt">
+        <label><span>登录态 JSON</span>
+          <textarea id="login-token" placeholder='{"authorization":"eyJ...","organization_code":"h70imn51gp0f"}'></textarea></label>
+        <div class="sub">可从桌面端 <code>MAGIC:user:authorization</code>、网页版 localStorage 或任意请求头里取。</div>
+      </div>
+
+      <div class="pane" id="pane-file">
+        <div class="note-box">选一个账号 JSON（本插件导出的记录，或任意带 <code>authorization</code> 的 JSON），会自动填到「粘贴登录态」里。</div>
+        <label><span>文件</span><input id="login-file" type="file" accept=".json,application/json" /></label>
+      </div>
+
+      <div class="section-title">可选</div>
+      <div class="row">
+        <label><span>别名（字母/数字/- _ .，可留空）</span><input id="login-alias" placeholder="默认按手机号后四位" /></label>
+        <label style="flex:0 0 140px"><span>优先级</span><input id="login-priority" type="number" min="1" max="99" value="5" /></label>
+      </div>
+    </div>
+    <footer>
+      <button class="act ghost" data-close="modal-add">取消</button>
+      <button class="act" id="btn-login-submit">登录并添加</button>
+      <button class="act" id="btn-login-token" style="display:none">导入</button>
+    </footer>
+  </div>
+</div>
+
+<!-- ============ 编辑账号 ============ -->
+<div class="backdrop" id="modal-edit">
+  <div class="modal">
+    <header>
+      <h3>编辑账号 <span class="sub" id="edit-title">—</span></h3>
+      <button class="x" data-close="modal-edit">✕</button>
+    </header>
+    <div class="body">
+      <div class="section-title">基本信息</div>
+      <div class="row">
+        <label><span>别名（字母/数字/- _ .）</span><input id="edit-alias" /></label>
+        <label style="flex:0 0 140px"><span>优先级</span><input id="edit-priority" type="number" min="1" max="99" /></label>
+      </div>
+      <label><span>备注</span><input id="edit-note" placeholder="例如：朋友的号，晚上别用" /></label>
+
+      <div class="section-title">调度</div>
+      <div class="row" style="align-items:center">
+        <label class="inline"><label class="switch"><input type="checkbox" id="edit-disabled" /><span class="track"></span></label> 启用</label>
+        <label class="inline"><label class="switch"><input type="checkbox" id="edit-dead" /><span class="track"></span></label> 标记已注销</label>
+      </div>
+      <div class="kv" id="edit-health"></div>
+
+      <div class="section-title">登录态（30 天，上游不可续期）</div>
+      <div class="row">
+        <label><span>手机号</span><input id="edit-phone" placeholder="真实号码，用于重登" /></label>
+        <label><span>密码</span><input id="edit-password" type="password" placeholder="留空表示不保存" /></label>
+      </div>
+      <label class="inline"><label class="switch"><input type="checkbox" id="edit-auto" /><span class="track"></span></label> 到期自动重登（保存密码，到期前 48h 自动登录）</label>
+      <div class="kv" id="edit-login"></div>
+
+      <div class="section-title">设备</div>
+      <div class="row">
+        <label><span>设备名</span><input id="edit-device-name" /></label>
+        <label><span>设备 id（只读）</span><input id="edit-device-id" disabled /></label>
+      </div>
+    </div>
+    <footer>
+      <button class="act danger" id="btn-edit-delete" style="margin-right:auto">删除账号</button>
+      <button class="act ghost" data-close="modal-edit">取消</button>
+      <button class="act" id="btn-edit-save">保存</button>
+    </footer>
+  </div>
+</div>
+
 <div class="toasts" id="toasts"></div>
 
 <script>
@@ -263,14 +475,17 @@ function managementBase() {
 }
 const API = managementBase();
 const KEY_STORE = "magic2api.managementKey";
+const POINTS_KEY = "magic2api.pointsAccount";
 const state = {
   tab: "overview",
   accounts: [],
   models: [],
   captcha: null,
-  pointsAccount: "",
   loginState: new URLSearchParams(location.search).get("state") || "",
   key: "",
+  editId: "",
+  pointsAccount: localStorage.getItem(POINTS_KEY) || "",
+  points: null,
 };
 
 // The console is served without auth; every data call needs the host's
@@ -304,11 +519,11 @@ function saveKey() {
 }
 
 function toast(message, kind) {
-  const box = document.createElement("div");
-  box.className = "toast " + (kind || "");
-  box.textContent = message;
-  document.getElementById("toasts").appendChild(box);
-  setTimeout(() => box.remove(), kind === "err" ? 8000 : 4000);
+  const el = document.createElement("div");
+  el.className = "toast " + (kind || "");
+  el.textContent = message;
+  document.getElementById("toasts").appendChild(el);
+  setTimeout(() => el.remove(), 3600);
 }
 
 async function api(path, options) {
@@ -331,11 +546,9 @@ async function api(path, options) {
   }
   const text = await response.text();
   let payload = null;
-  try { payload = text ? JSON.parse(text) : null; } catch (e) { payload = null; }
-  if (!response.ok) {
-    const message = (payload && (payload.error || payload.message)) || ("HTTP " + response.status + " " + text.slice(0, 200));
-    toast(message, "err");
-    throw new Error(message);
+  try { payload = text ? JSON.parse(text) : null; } catch (err) {
+    toast("响应不是 JSON：" + text.slice(0, 120), "err");
+    throw new Error("bad response");
   }
   if (payload && payload.ok === false) {
     toast(payload.error || "操作失败", "err");
@@ -353,8 +566,11 @@ function fmtTime(ms) {
 function esc(value) {
   return String(value == null ? "" : value).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
-function stat(label, value) {
-  return `<div class="stat"><div class="k">${esc(label)}</div><div class="v">${esc(value)}</div></div>`;
+function stat(label, value, accent) {
+  return `<div class="stat ${accent ? "accent" : ""}"><div class="k">${esc(label)}</div><div class="v">${value}</div></div>`;
+}
+function num(value) {
+  return Number(value || 0).toLocaleString("zh-CN", { maximumFractionDigits: 2 });
 }
 
 // ---- tabs ----
@@ -402,7 +618,7 @@ async function loadOverview() {
   ].join("");
 }
 
-// ---- accounts ----
+/* ================= 账号 ================= */
 // The login token (JWT) lasts 30 days and cannot be refreshed, so the console
 // has to surface its deadline: after it passes only a fresh sign-in helps.
 function fmtJwt(a) {
@@ -415,43 +631,114 @@ function fmtJwt(a) {
   return { pill: '<span class="pill ok">剩 ' + days + ' 天</span>', when };
 }
 
-async function loadAccounts() {
-  const accounts = await api("/accounts");
-  state.accounts = accounts || [];
-  document.getElementById("accounts-count").textContent = "共 " + state.accounts.length + " 个";
+function accountState(a) {
+  if (a.dead) return { key: "dead", pill: '<span class="pill err">已注销</span>' };
+  if (a.disabled) return { key: "disabled", pill: '<span class="pill warn">已禁用</span>' };
+  if (a.jwt_expired && !a.api_key_valid) return { key: "relogin", pill: '<span class="pill err">需重登</span>' };
+  if (a.cooldown_until && a.cooldown_until > Date.now()) return { key: "cooling", pill: '<span class="pill warn">冷却中</span>' };
+  return { key: "ok", pill: '<span class="pill ok">可用</span>' };
+}
+
+function filteredAccounts() {
+  const needle = document.getElementById("acct-search").value.trim().toLowerCase();
+  const filter = document.getElementById("acct-filter").value;
+  return state.accounts.filter(a => {
+    if (filter && accountState(a).key !== filter) return false;
+    if (!needle) return true;
+    return [a.alias, a.phone, a.phone_display, a.user_id, a.nickname, a.id]
+      .some(v => String(v || "").toLowerCase().includes(needle));
+  });
+}
+
+function renderAccounts() {
+  const rows = filteredAccounts();
   const body = document.getElementById("accounts-body");
-  if (!state.accounts.length) {
-    body.innerHTML = `<tr><td colspan="9" class="muted">还没有账号，用上面的登录方式添加</td></tr>`;
+  document.getElementById("accounts-count").textContent = state.accounts.length + " 个";
+  if (!rows.length) {
+    body.innerHTML = `<tr><td colspan="9" class="muted">没有匹配的账号</td></tr>`;
     return;
   }
-  body.innerHTML = state.accounts.map(a => {
-    const status = a.dead ? '<span class="pill err">已注销</span>'
-      : a.disabled ? '<span class="pill warn">已禁用</span>'
-      : (a.jwt_expired && !a.api_key_valid) ? '<span class="pill err">需重登</span>'
-      : (a.cooldown_until && a.cooldown_until > Date.now()) ? '<span class="pill warn">冷却中</span>'
-      : '<span class="pill ok">可用</span>';
+  body.innerHTML = rows.map(a => {
+    const st = accountState(a);
     const key = a.api_key_valid ? '<span class="pill ok">有效</span>' : '<span class="pill warn">待续期</span>';
     const jwt = fmtJwt(a);
-    return `<tr>
-      <td>${esc(a.alias)}<div class="muted" style="font-size:11px">${esc(a.source)}</div></td>
-      <td>${esc(a.nickname || "-")}<div class="muted" style="font-size:11px">${esc(a.phone_display || a.phone || a.user_id || "")}</div></td>
-      <td>${esc(a.organization_code)}</td>
-      <td>${esc(a.device_name)}<div class="muted" style="font-size:11px">${esc(a.device_id.slice(0, 16))}…</div></td>
-      <td>${a.priority}</td>
-      <td>${key}<div class="muted" style="font-size:11px">${fmtTime(a.api_key_expires_at)}</div></td>
-      <td>${jwt.pill}${a.auto_relogin ? ' <span class="pill ok">自动</span>' : ""}<div class="muted" style="font-size:11px">${jwt.when}</div></td>
-      <td>${status}${a.last_error ? `<div class="muted" style="font-size:11px">${esc(a.last_error.slice(0, 60))}</div>` : ""}</td>
-      <td>
-        <button class="act ghost" data-act="refresh" data-id="${esc(a.id)}">续期</button>
-        <button class="act ghost" data-act="toggle" data-id="${esc(a.id)}" data-disabled="${a.disabled}">${a.disabled ? "启用" : "禁用"}</button>
-        ${a.dead ? `<button class="act ghost" data-act="revive" data-id="${esc(a.id)}">复活</button>` : ""}
-        <button class="act ghost" data-act="relogin" data-id="${esc(a.id)}">重登</button>
-        ${a.auto_relogin ? `<button class="act ghost" data-act="no-auto" data-id="${esc(a.id)}">关自动</button>` : ""}
-        <button class="act ghost" data-act="export" data-id="${esc(a.id)}">导出</button>
-        <button class="act ghost" data-act="delete" data-id="${esc(a.id)}">删除</button>
-      </td></tr>`;
+    const auto = a.auto_relogin ? '<span class="pill ok">自动</span>' : '<span class="pill">手动</span>';
+    return `<tr data-id="${esc(a.id)}">
+      <td><span class="drag" title="按优先级自动排序">⠿</span></td>
+      <td><div class="prio">
+        <button data-prio="-1" title="降低">−</button>
+        <span class="val ${a.priority >= 9 ? "top" : ""}">${a.priority}</span>
+        <button data-prio="1" title="提高">＋</button>
+      </div></td>
+      <td>${esc(a.alias)}<div class="sub">${esc(a.source || "")}</div></td>
+      <td>${esc(a.nickname || "-")}<div class="sub">${esc(a.phone_display || a.phone || a.user_id || "")}</div></td>
+      <td>${esc(a.device_name || "-")}<div class="sub">${esc((a.device_id || "").slice(0, 12))}${a.device_id ? "…" : ""}</div></td>
+      <td>${key}<div class="sub">${fmtTime(a.api_key_expires_at)}</div></td>
+      <td>${jwt.pill} ${auto}<div class="sub">${jwt.when}</div></td>
+      <td>${st.pill}${a.last_error ? `<div class="sub">${esc(String(a.last_error).slice(0, 42))}</div>` : ""}</td>
+      <td><div class="flex">
+        <button class="act ghost sm" data-act="edit">编辑</button>
+        <button class="act ghost sm" data-act="relogin">重登</button>
+        <button class="act ghost sm" data-act="export">导出</button>
+        <button class="act danger sm" data-act="delete">删除</button>
+      </div></td>
+    </tr>`;
   }).join("");
 }
+
+async function loadAccounts() {
+  state.accounts = (await api("/accounts")) || [];
+  renderAccounts();
+}
+
+document.getElementById("acct-search").addEventListener("input", renderAccounts);
+document.getElementById("acct-filter").addEventListener("change", renderAccounts);
+
+document.getElementById("accounts-body").addEventListener("click", async event => {
+  const row = event.target.closest("tr[data-id]");
+  if (!row) return;
+  const id = row.dataset.id;
+  const account = state.accounts.find(a => a.id === id);
+
+  const prioButton = event.target.closest("button[data-prio]");
+  if (prioButton) {
+    if (!account) return;
+    const next = Math.max(1, Math.min(99, Number(account.priority || 5) + Number(prioButton.dataset.prio)));
+    if (next === account.priority) return;
+    prioButton.disabled = true;
+    try {
+      await api("/accounts/update", { method: "POST", body: JSON.stringify({ id, priority: next }) });
+      account.priority = next;
+      renderAccounts();
+    } catch (err) { /* shown */ } finally { prioButton.disabled = false; }
+    return;
+  }
+
+  const action = event.target.closest("button[data-act]");
+  if (!action || !account) return;
+  action.disabled = true;
+  try {
+    if (action.dataset.act === "edit") {
+      openEdit(account);
+    } else if (action.dataset.act === "relogin") {
+      const phone = /^[0-9]{6,20}$/.test(account.phone || "") ? account.phone : prompt("手机号");
+      if (!phone) return;
+      const password = prompt("账号 " + account.alias + " 的登录密码（用于续期 " + phone + "）");
+      if (!password) return;
+      const remember = confirm("记住这个密码，到期自动重登？\n（密码以明文存在插件数据目录，跟 token 同级）");
+      await api("/login/password", { method: "POST", body: JSON.stringify({ phone, password, alias: account.id, remember }) });
+      toast(remember ? "已重新登录，并开启到期自动重登" : "已重新登录并续期", "ok");
+      await loadAccounts();
+    } else if (action.dataset.act === "export") {
+      await exportAccounts(id);
+    } else if (action.dataset.act === "delete") {
+      if (!confirm("确认删除账号 " + account.alias + "？")) return;
+      await api("/accounts/delete", { method: "POST", body: JSON.stringify({ id }) });
+      toast("已删除", "ok");
+      await loadAccounts();
+    }
+  } catch (err) { /* shown */ } finally { action.disabled = false; }
+});
 
 // Downloads travel through fetch because the management key sits in a header,
 // then the blob is handed to the browser as a file.
@@ -485,71 +772,91 @@ async function exportAccounts(id) {
     toast("已导出 " + name, "ok");
   } catch (err) { toast("导出失败：" + err.message, "err"); }
 }
-
 document.getElementById("btn-export-all").addEventListener("click", () => exportAccounts(""));
 
-document.getElementById("accounts-body").addEventListener("click", async event => {
-  const button = event.target.closest("button[data-act]");
-  if (!button) return;
-  const id = button.dataset.id;
-  button.disabled = true;
-  try {
-    if (button.dataset.act === "refresh") {
-      await api("/accounts/refresh", { method: "POST", body: JSON.stringify({ id }) });
-      toast("已续期", "ok");
-    } else if (button.dataset.act === "toggle") {
-      const disabled = button.dataset.disabled === "true";
-      await api("/accounts/update", { method: "POST", body: JSON.stringify({ id, disabled: !disabled }) });
-      toast(disabled ? "已启用" : "已禁用", "ok");
-    } else if (button.dataset.act === "revive") {
-      await api("/accounts/update", { method: "POST", body: JSON.stringify({ id, dead: false }) });
-      toast("已复活", "ok");
-    } else if (button.dataset.act === "relogin") {
-      const account = state.accounts.find(a => a.id === id);
-      const phone = (account && /^[0-9]{6,20}$/.test(account.phone || "")) ? account.phone : prompt("手机号");
-      if (!phone) return;
-      const password = prompt("账号 " + id + " 的登录密码（用于续期 " + (account && account.phone ? phone : "该账号") + "）");
-      if (!password) return;
-      button.disabled = true;
-      const remember = confirm("记住这个密码，到期自动重登？\n（密码以明文存在插件数据目录，跟 token 同级）");
-      await api("/login/password", { method: "POST", body: JSON.stringify({ phone, password, alias: id, remember }) });
-      toast(remember ? "已重新登录，并开启到期自动重登" : "已重新登录并续期", "ok");
-      await loadAccounts();
-      return;
-    } else if (button.dataset.act === "no-auto") {
-      if (!confirm("关闭自动重登会立刻删除已保存的密码，继续？")) return;
-      await api("/accounts/update", { method: "POST", body: JSON.stringify({ id, auto_relogin: false }) });
-      toast("已关闭自动重登，保存的密码已删除", "ok");
-      await loadAccounts();
-      return;
-    } else if (button.dataset.act === "export") {
-      button.disabled = false;
-      await exportAccounts(id);
-      return;
-    } else if (button.dataset.act === "delete") {
-      if (!confirm("确认删除账号 " + id + "？")) return;
-      await api("/accounts/delete", { method: "POST", body: JSON.stringify({ id }) });
-      toast("已删除", "ok");
-    }
-    await loadAccounts();
-  } catch (err) { /* toast shown */ } finally { button.disabled = false; }
+/* ---- 弹窗基础 ---- */
+function openModal(id) { document.getElementById(id).classList.add("open"); }
+function closeModal(id) { document.getElementById(id).classList.remove("open"); }
+document.querySelectorAll("[data-close]").forEach(button => {
+  button.addEventListener("click", () => closeModal(button.dataset.close));
+});
+document.querySelectorAll(".backdrop").forEach(backdrop => {
+  backdrop.addEventListener("click", event => { if (event.target === backdrop) backdrop.classList.remove("open"); });
+});
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape") document.querySelectorAll(".backdrop.open").forEach(el => el.classList.remove("open"));
 });
 
-document.getElementById("btn-login-password").addEventListener("click", async event => {
-  const phone = document.getElementById("login-phone").value.trim();
-  const password = document.getElementById("login-password").value;
-  if (!phone || !password) { toast("请填写手机号与密码", "err"); return; }
-  event.target.disabled = true;
+/* ---- 添加账号 ---- */
+document.getElementById("btn-add-account").addEventListener("click", () => openModal("modal-add"));
+document.getElementById("add-seg").addEventListener("click", event => {
+  const button = event.target.closest("button[data-pane]");
+  if (!button) return;
+  document.querySelectorAll("#add-seg button").forEach(b => b.classList.toggle("active", b === button));
+  document.querySelectorAll("#modal-add .pane").forEach(p => p.classList.remove("active"));
+  document.getElementById(button.dataset.pane).classList.add("active");
+  const importMode = button.dataset.pane === "pane-jwt";
+  document.getElementById("btn-login-submit").style.display = importMode ? "none" : "";
+  document.getElementById("btn-login-token").style.display = importMode ? "" : "none";
+});
+
+document.getElementById("login-file").addEventListener("change", async event => {
+  const file = event.target.files && event.target.files[0];
+  if (!file) return;
+  const text = await file.text();
+  document.getElementById("login-token").value = text;
+  document.querySelectorAll("#add-seg button").forEach(b => b.classList.toggle("active", b.dataset.pane === "pane-jwt"));
+  document.querySelectorAll("#modal-add .pane").forEach(p => p.classList.remove("active"));
+  document.getElementById("pane-jwt").classList.add("active");
+  document.getElementById("btn-login-submit").style.display = "none";
+  document.getElementById("btn-login-token").style.display = "";
+  toast("已读入 " + file.name, "ok");
+});
+
+function optionalAccountFields() {
+  const alias = document.getElementById("login-alias").value.trim();
+  const priority = Number(document.getElementById("login-priority").value) || 0;
+  const out = {};
+  if (alias) out.alias = alias;
+  if (priority > 0) out.priority = priority;
+  return out;
+}
+
+document.getElementById("btn-login-submit").addEventListener("click", async event => {
+  const smsActive = document.getElementById("pane-sms").classList.contains("active");
+  const button = event.target;
+  button.disabled = true;
   try {
-    const remember = document.getElementById("login-remember").checked;
-    const account = await api("/login/password", { method: "POST", body: JSON.stringify({ phone, password, remember, state: state.loginState }) });
-    toast("登录成功：" + account.alias, "ok");
+    if (!smsActive) {
+      const phone = document.getElementById("login-phone").value.trim();
+      const password = document.getElementById("login-password").value;
+      if (!phone || !password) { toast("请填写手机号与密码", "err"); return; }
+      const remember = document.getElementById("login-remember").checked;
+      const extra = optionalAccountFields();
+      const account = await api("/login/password", {
+        method: "POST",
+        body: JSON.stringify(Object.assign({ phone, password, remember, state: state.loginState }, extra)),
+      });
+      toast("登录成功：" + account.alias, "ok");
+    } else {
+      const phone = document.getElementById("sms-phone").value.trim();
+      const code = document.getElementById("login-code").value.trim();
+      if (!phone || !code) { toast("请填写手机号与短信验证码", "err"); return; }
+      const extra = optionalAccountFields();
+      const account = await api("/login/sms/verify", {
+        method: "POST",
+        body: JSON.stringify(Object.assign({ phone, code, state: state.loginState }, extra)),
+      });
+      toast("登录成功：" + account.alias, "ok");
+    }
+    closeModal("modal-add");
     await loadAccounts();
-  } catch (err) { /* shown */ } finally { event.target.disabled = false; }
+    if (state.tab === "points") await loadPoints();
+  } catch (err) { /* shown */ } finally { button.disabled = false; }
 });
 
 document.getElementById("btn-captcha").addEventListener("click", async event => {
-  const phone = document.getElementById("login-phone").value.trim();
+  const phone = (document.getElementById("sms-phone").value || document.getElementById("login-phone").value).trim();
   if (!phone) { toast("请先填写手机号", "err"); return; }
   event.target.disabled = true;
   try {
@@ -564,12 +871,11 @@ document.getElementById("btn-captcha").addEventListener("click", async event => 
 
 document.getElementById("captcha-angle").addEventListener("input", event => {
   document.getElementById("captcha-angle-label").textContent = event.target.value;
-  const img = document.getElementById("captcha-img");
-  img.style.transform = "rotate(" + event.target.value + "deg)";
+  document.getElementById("captcha-img").style.transform = "rotate(" + event.target.value + "deg)";
 });
 
 document.getElementById("btn-send-sms").addEventListener("click", async event => {
-  const phone = document.getElementById("login-phone").value.trim();
+  const phone = document.getElementById("sms-phone").value.trim();
   if (!state.captcha) { toast("请先获取图形验证码", "err"); return; }
   const angle = Number(document.getElementById("captcha-angle").value);
   event.target.disabled = true;
@@ -580,17 +886,7 @@ document.getElementById("btn-send-sms").addEventListener("click", async event =>
   } catch (err) { /* shown */ } finally { event.target.disabled = false; }
 });
 
-document.getElementById("btn-login-sms").addEventListener("click", async event => {
-  const phone = document.getElementById("login-phone").value.trim();
-  const code = document.getElementById("login-code").value.trim();
-  if (!code) { toast("请填写短信验证码", "err"); return; }
-  event.target.disabled = true;
-  try {
-    const account = await api("/login/sms/verify", { method: "POST", body: JSON.stringify({ phone, code, state: state.loginState }) });
-    toast("登录成功：" + account.alias, "ok");
-    await loadAccounts();
-  } catch (err) { /* shown */ } finally { event.target.disabled = false; }
-});
+document.getElementById("btn-login-sms").addEventListener("click", () => document.getElementById("btn-login-submit").click());
 
 document.getElementById("btn-login-token").addEventListener("click", async event => {
   const raw = document.getElementById("login-token").value.trim();
@@ -603,20 +899,308 @@ document.getElementById("btn-login-token").addEventListener("click", async event
         authorization: parsed.authorization || parsed.access_token || parsed.accessToken,
         organization_code: parsed.organization_code || parsed.organizationCode || "",
         alias: parsed.alias || "",
+        priority: parsed.priority || 0,
+        password: parsed.password || "",
+        auto_relogin: !!parsed.auto_relogin,
       };
     } catch (err) { toast("JSON 解析失败：" + err.message, "err"); return; }
   }
   if (!payload.authorization) { toast("缺少 authorization", "err"); return; }
+  if (!payload.alias) {
+    const typed = document.getElementById("login-alias").value.trim();
+    if (typed) payload.alias = typed;
+  }
   event.target.disabled = true;
   try {
     payload.state = state.loginState;
     const account = await api("/login/token", { method: "POST", body: JSON.stringify(payload) });
     toast("已导入：" + account.alias, "ok");
+    closeModal("modal-add");
     await loadAccounts();
   } catch (err) { /* shown */ } finally { event.target.disabled = false; }
 });
 
-// ---- models ----
+/* ---- 编辑账号 ---- */
+function openEdit(account) {
+  state.editId = account.id;
+  document.getElementById("edit-title").textContent = account.alias;
+  document.getElementById("edit-alias").value = account.alias || "";
+  document.getElementById("edit-priority").value = account.priority || 5;
+  document.getElementById("edit-note").value = account.note || "";
+  document.getElementById("edit-disabled").checked = !account.disabled;
+  document.getElementById("edit-dead").checked = !!account.dead;
+  document.getElementById("edit-phone").value = account.phone || "";
+  document.getElementById("edit-password").value = "";
+  document.getElementById("edit-password").placeholder = account.auto_relogin ? "已保存，留空表示不修改" : "留空表示不保存";
+  document.getElementById("edit-auto").checked = !!account.auto_relogin;
+  document.getElementById("edit-device-name").value = account.device_name || "";
+  document.getElementById("edit-device-id").value = account.device_id || "";
+  document.getElementById("edit-health").innerHTML = [
+    `<span class="k">冷却至</span><span>${account.cooldown_until ? fmtTime(account.cooldown_until) : "—"}</span>`,
+    `<span class="k">最近成功</span><span>${account.last_success ? fmtTime(account.last_success) : "—"}</span>`,
+    `<span class="k">失败次数</span><span>${account.failures || 0}</span>`,
+    `<span class="k">最近错误</span><span>${esc(account.last_error || "—")}</span>`,
+  ].join("");
+  document.getElementById("edit-login").innerHTML = [
+    `<span class="k">令牌到期</span><span>${account.jwt_expires_at ? fmtTime(account.jwt_expires_at) : "未知"}</span>`,
+    `<span class="k">用户 id</span><span>${esc(account.user_id || "—")}</span>`,
+    `<span class="k">组织</span><span>${esc(account.organization_code || "—")}</span>`,
+  ].join("");
+  openModal("modal-edit");
+}
+
+document.getElementById("btn-edit-save").addEventListener("click", async event => {
+  const account = state.accounts.find(a => a.id === state.editId);
+  if (!account) return;
+  const patch = { id: state.editId };
+  const alias = document.getElementById("edit-alias").value.trim();
+  const priority = Number(document.getElementById("edit-priority").value);
+  const note = document.getElementById("edit-note").value;
+  const phone = document.getElementById("edit-phone").value.trim();
+  const password = document.getElementById("edit-password").value;
+  const auto = document.getElementById("edit-auto").checked;
+  const deviceName = document.getElementById("edit-device-name").value.trim();
+
+  if (alias && alias !== account.alias) {
+    if (!/^[A-Za-z0-9._-]+$/.test(alias)) { toast("别名只能包含字母、数字、- _ .（会用作凭据文件名）", "err"); return; }
+    patch.alias = alias;
+  }
+  if (priority && priority !== account.priority) patch.priority = priority;
+  if (note !== (account.note || "")) patch.note = note;
+  if (phone !== (account.phone || "")) patch.phone = phone;
+  if (deviceName && deviceName !== (account.device_name || "")) patch.device_name = deviceName;
+  if (password) { patch.password = password; patch.auto_relogin = auto; }
+  else if (auto !== !!account.auto_relogin) patch.auto_relogin = auto;
+  if (document.getElementById("edit-disabled").checked === !!account.disabled) patch.disabled = !!account.disabled;
+  if (document.getElementById("edit-dead").checked !== !!account.dead) patch.dead = document.getElementById("edit-dead").checked;
+
+  if (Object.keys(patch).length === 1) { closeModal("modal-edit"); return; }
+  event.target.disabled = true;
+  try {
+    await api("/accounts/update", { method: "POST", body: JSON.stringify(patch) });
+    toast("已保存", "ok");
+    closeModal("modal-edit");
+    await loadAccounts();
+    if (state.tab === "points") await loadPoints();
+  } catch (err) { /* shown */ } finally { event.target.disabled = false; }
+});
+
+document.getElementById("btn-edit-delete").addEventListener("click", async () => {
+  const account = state.accounts.find(a => a.id === state.editId);
+  if (!account || !confirm("确认删除账号 " + account.alias + "？")) return;
+  await api("/accounts/delete", { method: "POST", body: JSON.stringify({ id: account.id }) });
+  toast("已删除", "ok");
+  closeModal("modal-edit");
+  await loadAccounts();
+});
+
+/* ================= 积分 ================= */
+function renderPointsTotals(data) {
+  const t = data.totals || {};
+  document.getElementById("points-fetched").textContent = "更新于 " + fmtTime(data.fetched_at);
+  document.getElementById("points-totals").innerHTML = [
+    stat("总积分", num(t.balance), true),
+    stat("今日消耗", num(t.today_consumed)),
+    stat("今日已领奖励", num(Number(t.today_gift) + Number(t.today_task)) + ` <small>${t.gift_claimed_count || 0}/${t.accounts || 0} 账号已领</small>`),
+    stat("可领任务 / 奖励", (t.pending_tasks || 0) + " <small>约 +" + num(t.pending_reward) + "</small>"),
+  ].join("");
+
+  const schedule = data.schedule || {};
+  const on = !!schedule.enabled;
+  document.getElementById("set-schedule-on").checked = on;
+  document.getElementById("set-schedule-time").value = schedule.time || "09:05";
+  document.getElementById("schedule-state").textContent = on ? "已开启" : "已关闭";
+  document.getElementById("schedule-next").textContent = on ? fmtTime(Date.parse(schedule.next_run)) : "—";
+  document.getElementById("schedule-window").textContent = schedule.window ? "今日可领取" : "未到时间";
+}
+
+function renderPointsList(data) {
+  const needle = document.getElementById("points-search").value.trim().toLowerCase();
+  const accounts = (data.accounts || []).filter(a => !needle || a.alias.toLowerCase().includes(needle));
+  document.getElementById("points-list-total").innerHTML =
+    `合计 <b>${num((data.totals || {}).balance)}</b> 积分 · ${(data.accounts || []).length} 个账号`;
+  document.getElementById("points-list").innerHTML = accounts.map(a => `
+    <div class="acct-item ${state.pointsAccount === a.id ? "active" : ""}" data-id="${esc(a.id)}">
+      <div class="avatar">${esc(String(a.alias || "?").slice(0, 1).toUpperCase())}</div>
+      <div>
+        <div class="name">${esc(a.alias)}</div>
+        <div class="meta">${esc(a.phone || "未绑定")} · 今日 ${num(a.today_consumed)}</div>
+      </div>
+      <div class="bal">${num(a.balance)}<small>积分</small></div>
+    </div>`).join("") || `<div class="empty"><div>没有账号</div></div>`;
+}
+
+function renderPointsDetail(detail) {
+  const account = detail.account || {};
+  const p = detail.points || {};
+  const balance = p.balance || {};
+  const today = p.today || {};
+  const tasks = p.tasks || [];
+  const records = p.records || [];
+  const pending = tasks.filter(t => t.status === "PENDING" && t.reward_status === "PENDING" && t.code !== "first_ai_work");
+  const reward = pending.reduce((sum, t) => sum + Number(t.points || 0), 0);
+
+  document.getElementById("points-detail").innerHTML = `
+    <div class="card">
+      <div class="head">
+        <h2>${esc(account.alias || "-")}</h2>
+        <span class="pill info">${esc(account.phone_display || account.phone || "未绑定")}</span>
+        <span class="spacer"></span>
+        <button class="act ghost sm" id="btn-points-reload">刷新</button>
+        <button class="act sm" id="btn-claim-gift">领每日登录</button>
+        <button class="act sm" id="btn-claim-tasks">一键领任务</button>
+      </div>
+      <div class="grid">
+        <div class="stat accent"><div class="k">可用积分</div><div class="v">${num(balance.total_points)}</div></div>
+        <div class="stat"><div class="k">今日登录奖励</div><div class="v">${today.gift_points ? "+" + num(today.gift_points) : "—"} <small>${today.last_claimed_date ? "已领取" : "未领取"}</small></div></div>
+        <div class="stat"><div class="k">今日消耗</div><div class="v">${num(Math.abs(Number(today.consumed_points || 0)))}</div></div>
+        <div class="stat"><div class="k">待领任务</div><div class="v">${pending.length} <small>约 +${num(reward)}</small></div></div>
+      </div>
+      ${p.balance_error ? `<div class="note-box" style="margin-top:12px">余额读取失败：${esc(p.balance_error)}</div>` : ""}
+    </div>
+
+    <div class="card">
+      <div class="head"><h2>任务板</h2><span class="muted" style="font-size:12px">领取后积分立刻到账</span></div>
+      <div class="tasks">
+        ${tasks.map(t => {
+          const claimable = t.status === "PENDING" && t.reward_status === "PENDING" && t.code !== "first_ai_work";
+          return `<div class="task">
+            <div class="t">${esc(t.title || t.code)}</div>
+            <div class="d">${esc(t.description || t.code)}</div>
+            <div class="foot">
+              ${t.reward_status === "GRANTED" ? '<span class="pill ok">已领取</span>'
+                : claimable ? `<button class="act sm" data-task="${esc(t.code)}">领取</button>`
+                : '<span class="pill">不可领</span>'}
+              <span class="reward">+${num(t.points)}</span>
+            </div>
+          </div>`;
+        }).join("") || `<div class="empty">没有任务</div>`}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="head"><h2>积分流水</h2><span class="muted" style="font-size:12px">最新 50 条，个人视角</span></div>
+      <div class="scroll" style="max-height:340px"><table>
+        <thead><tr><th>时间</th><th>类型</th><th>明细</th><th style="text-align:right">积分</th></tr></thead>
+        <tbody>
+          ${records.map(r => {
+            const amount = Number(r.amount || 0);
+            return `<tr>
+              <td>${esc(r.created_at)}</td>
+              <td>${esc(r.business_type)}</td>
+              <td class="sub">${esc(r.description || r.label || "")}</td>
+              <td style="text-align:right"><span class="amount ${amount > 0 ? "plus" : "minus"}">${amount > 0 ? "+" : ""}${num(amount)}</span></td>
+            </tr>`;
+          }).join("") || `<tr><td colspan="4" class="muted">暂无流水</td></tr>`}
+        </tbody>
+      </table></div>
+      ${p.records_error ? `<div class="note-box" style="margin-top:10px">流水读取失败：${esc(p.records_error)}</div>` : ""}
+    </div>`;
+
+  document.getElementById("btn-points-reload").addEventListener("click", () => loadPoints(true));
+  document.getElementById("btn-claim-gift").addEventListener("click", event => claimGift(event.target));
+  document.getElementById("btn-claim-tasks").addEventListener("click", event => claimTasks(event.target));
+  document.getElementById("points-detail").addEventListener("click", event => {
+    const button = event.target.closest("button[data-task]");
+    if (button) claimTasks(button, button.dataset.task);
+  });
+}
+
+async function loadPoints(forceDetail) {
+  const data = await api("/points/summary");
+  state.points = data;
+  renderPointsTotals(data);
+  renderPointsList(data);
+
+  const known = (data.accounts || []).map(a => a.id);
+  if (!state.pointsAccount || !known.includes(state.pointsAccount)) {
+    state.pointsAccount = known[0] || "";
+  }
+  localStorage.setItem(POINTS_KEY, state.pointsAccount);
+  if (!state.pointsAccount) return;
+  renderPointsList(data);
+  await loadPointsDetail(forceDetail);
+}
+
+async function loadPointsDetail() {
+  if (!state.pointsAccount) return;
+  try {
+    const detail = await api("/points?id=" + encodeURIComponent(state.pointsAccount));
+    renderPointsDetail(detail);
+  } catch (err) { /* shown */ }
+}
+
+async function claimGift(button) {
+  if (!state.pointsAccount) return;
+  button.disabled = true;
+  try {
+    const gift = await api("/points/claim", { method: "POST", body: JSON.stringify({ id: state.pointsAccount }) });
+    toast(gift.granted ? ("到账 " + num(gift.point_amount) + " 积分") : (gift.message || "今日已领取"), gift.granted ? "ok" : "");
+    await loadPoints();
+  } catch (err) { /* shown */ } finally { button.disabled = false; }
+}
+
+// One task when code is given, otherwise every claimable task of the account.
+async function claimTasks(button, code) {
+  if (!state.pointsAccount) return;
+  button.disabled = true;
+  try {
+    const codes = code ? [code]
+      : Array.from(document.querySelectorAll("#points-detail button[data-task]")).map(b => b.dataset.task);
+    for (const item of codes) {
+      try {
+        const result = await api("/points/task", { method: "POST", body: JSON.stringify({ id: state.pointsAccount, code: item }) });
+        toast(item + " 到账 " + num(result.points), "ok");
+      } catch (err) { /* shown */ }
+    }
+    await loadPoints();
+  } finally { button.disabled = false; }
+}
+
+document.getElementById("points-search").addEventListener("input", () => {
+  if (state.points) renderPointsList(state.points);
+});
+
+document.getElementById("points-list").addEventListener("click", async event => {
+  const item = event.target.closest(".acct-item");
+  if (!item) return;
+  state.pointsAccount = item.dataset.id;
+  localStorage.setItem(POINTS_KEY, state.pointsAccount);
+  if (state.points) renderPointsList(state.points);
+  await loadPointsDetail();
+});
+
+document.getElementById("btn-points-refresh").addEventListener("click", async event => {
+  event.target.disabled = true;
+  try { await loadPoints(); toast("已刷新", "ok"); }
+  catch (err) { /* shown */ } finally { event.target.disabled = false; }
+});
+
+document.getElementById("btn-points-claim-all").addEventListener("click", async event => {
+  event.target.disabled = true;
+  try {
+    const result = await api("/points/claim-all", { method: "POST" });
+    toast(result.message || "领取完成", result.failed ? "err" : "ok");
+    await loadPoints();
+  } catch (err) { /* shown */ } finally { event.target.disabled = false; }
+});
+
+document.getElementById("btn-schedule-save").addEventListener("click", async event => {
+  event.target.disabled = true;
+  try {
+    await api("/settings", {
+      method: "POST",
+      body: JSON.stringify({
+        daily_points_enabled: document.getElementById("set-schedule-on").checked,
+        points_schedule_time: document.getElementById("set-schedule-time").value.trim(),
+      }),
+    });
+    toast("定时领取已保存", "ok");
+    await loadPoints();
+  } catch (err) { /* shown */ } finally { event.target.disabled = false; }
+});
+
+/* ================= 其它页 ================= */
 async function loadModels() {
   const data = await api("/models");
   state.models = data.models || [];
@@ -635,7 +1219,6 @@ document.getElementById("btn-models-refresh").addEventListener("click", async ev
   catch (err) { /* shown */ } finally { event.target.disabled = false; }
 });
 
-// ---- requests ----
 async function loadRequests() {
   const rows = await api("/requests");
   document.getElementById("requests-body").innerHTML = (rows || []).map(r => {
@@ -649,92 +1232,6 @@ async function loadRequests() {
   }).join("") || `<tr><td colspan="12" class="muted">暂无请求</td></tr>`;
 }
 
-// ---- points ----
-async function loadPoints() {
-  if (!state.accounts.length) await loadAccounts();
-  const select = document.getElementById("points-account");
-  if (!select.options.length) {
-    select.innerHTML = state.accounts.map(a => `<option value="${esc(a.id)}">${esc(a.alias)}</option>`).join("");
-  }
-  if (!state.pointsAccount && select.options.length) state.pointsAccount = select.value;
-  if (!state.pointsAccount) {
-    document.getElementById("points-balance").innerHTML = `<div class="muted">没有账号</div>`;
-    return;
-  }
-  const data = await api("/points?id=" + encodeURIComponent(state.pointsAccount));
-  const p = data.points || {};
-  const balance = p.balance || {};
-  document.getElementById("points-balance").innerHTML = [
-    stat("总积分", balance.total_points != null ? balance.total_points : "-"),
-    stat("组织总积分", balance.organization_total_points != null ? balance.organization_total_points : "-"),
-    stat("过期配额数", (balance.expiring_quota_details || []).length),
-    stat("余额错误", p.balance_error || "无"),
-  ].join("");
-  const today = p.today || {};
-  document.getElementById("points-today").innerHTML = [
-    stat("今日登录奖励", today.gift_points || 0),
-    stat("今日任务奖励", today.task_points || 0),
-    stat("今日模型消耗", today.consumed_points || 0),
-    stat("最近领取日", today.last_claimed_date || "-"),
-  ].join("");
-  document.getElementById("tasks-body").innerHTML = (p.tasks || []).map(t => {
-    const claimable = t.status === "PENDING" && t.reward_status === "PENDING" && t.code !== "first_ai_work";
-    return `<tr>
-      <td>${esc(t.title || t.code)}<div class="muted" style="font-size:11px">${esc(t.code)}</div></td>
-      <td>${t.points || 0}</td>
-      <td><span class="pill ${t.status === "COMPLETED" ? "ok" : "warn"}">${esc(t.status)}</span></td>
-      <td><span class="pill ${t.reward_status === "GRANTED" ? "ok" : ""}">${esc(t.reward_status)}</span></td>
-      <td>${claimable ? `<button class="act" data-code="${esc(t.code)}">领取</button>` : '<span class="muted">-</span>'}</td>
-    </tr>`;
-  }).join("") || `<tr><td colspan="5" class="muted">暂无任务</td></tr>`;
-  document.getElementById("records-body").innerHTML = (p.records || []).map(r => {
-    const amount = Number(r.amount || 0);
-    return `<tr><td>${esc(r.created_at)}</td><td>${esc(r.business_type)}</td>
-      <td style="color:${amount < 0 ? "var(--err)" : "var(--ok)"}">${amount}</td>
-      <td>${esc(r.description || r.label || "")}</td></tr>`;
-  }).join("") || `<tr><td colspan="4" class="muted">暂无流水</td></tr>`;
-  if (p.records_error) toast(p.records_error, "err");
-  if (p.balance_error) toast(p.balance_error, "err");
-}
-
-document.getElementById("points-account").addEventListener("change", event => {
-  state.pointsAccount = event.target.value;
-  loadPoints();
-});
-document.getElementById("btn-points-reload").addEventListener("click", () => loadPoints());
-document.getElementById("btn-claim-gift").addEventListener("click", async event => {
-  event.target.disabled = true;
-  try {
-    const gift = await api("/points/claim", { method: "POST", body: JSON.stringify({ id: state.pointsAccount }) });
-    toast(gift.granted ? ("到账 " + gift.point_amount + " 积分") : (gift.message || "今日已领取"), gift.granted ? "ok" : "");
-    await loadPoints();
-  } catch (err) { /* shown */ } finally { event.target.disabled = false; }
-});
-document.getElementById("tasks-body").addEventListener("click", async event => {
-  const button = event.target.closest("button[data-code]");
-  if (!button) return;
-  button.disabled = true;
-  try {
-    const result = await api("/points/task", { method: "POST", body: JSON.stringify({ id: state.pointsAccount, code: button.dataset.code }) });
-    toast("领取成功，到账 " + result.points + " 积分", "ok");
-    await loadPoints();
-  } catch (err) { /* shown */ } finally { button.disabled = false; }
-});
-document.getElementById("btn-claim-all").addEventListener("click", async event => {
-  event.target.disabled = true;
-  try {
-    const buttons = Array.from(document.querySelectorAll("#tasks-body button[data-code]"));
-    for (const button of buttons) {
-      try {
-        const result = await api("/points/task", { method: "POST", body: JSON.stringify({ id: state.pointsAccount, code: button.dataset.code }) });
-        toast(button.dataset.code + " 到账 " + result.points, "ok");
-      } catch (err) { /* shown */ }
-    }
-    await loadPoints();
-  } finally { event.target.disabled = false; }
-});
-
-// ---- logs ----
 async function loadLogs() {
   const rows = await api("/logs");
   document.getElementById("logs-body").innerHTML = (rows || []).map(r => {
@@ -744,7 +1241,6 @@ async function loadLogs() {
   }).join("") || `<tr><td colspan="4" class="muted">暂无日志</td></tr>`;
 }
 
-// ---- settings ----
 async function loadSettings() {
   const cfg = await api("/settings");
   document.getElementById("set-rpm").value = cfg.rpm;
@@ -755,6 +1251,7 @@ async function loadSettings() {
   document.getElementById("set-proxy").value = cfg.proxy_url || "";
   document.getElementById("set-points").checked = !!cfg.points_logging;
   document.getElementById("set-daily").checked = !!cfg.daily_points_enabled;
+  document.getElementById("set-schedule").value = cfg.points_schedule_time || "09:05";
   document.getElementById("set-debug").checked = !!cfg.debug_dump;
   document.getElementById("settings-json").textContent = JSON.stringify(cfg, null, 2);
 }
@@ -770,6 +1267,7 @@ document.getElementById("btn-save-settings").addEventListener("click", async eve
       proxy_url: document.getElementById("set-proxy").value.trim(),
       points_logging: document.getElementById("set-points").checked,
       daily_points_enabled: document.getElementById("set-daily").checked,
+      points_schedule_time: document.getElementById("set-schedule").value.trim(),
       debug_dump: document.getElementById("set-debug").checked,
     };
     const cfg = await api("/settings", { method: "POST", body: JSON.stringify(patch) });
@@ -778,7 +1276,6 @@ document.getElementById("btn-save-settings").addEventListener("click", async eve
   } catch (err) { /* shown */ } finally { event.target.disabled = false; }
 });
 
-// ---- test chat ----
 document.getElementById("btn-test").addEventListener("click", async event => {
   event.target.disabled = true;
   const output = document.getElementById("test-output");

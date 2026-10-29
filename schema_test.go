@@ -770,3 +770,54 @@ func TestReloginSkipsMaskedPhone(t *testing.T) {
 		t.Fatal("a real phone should allow re-login")
 	}
 }
+
+func TestAliasFromAuthFileName(t *testing.T) {
+	cases := map[string]string{
+		"magic2api-live.json":       "live",
+		"magic2api-phone-8801.json": "phone-8801",
+		"magic2api-main.live.json":  "main.live",
+		"other-live.json":           "",
+		"live.json":                 "",
+		"":                          "",
+	}
+	for name, want := range cases {
+		if got := aliasFromAuthFileName(name); got != want {
+			t.Errorf("aliasFromAuthFileName(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestUpdateAccountRenameKeepsID(t *testing.T) {
+	a := newTestApp()
+	a.pool.put(&credential{ID: "live", Alias: "live", Authorization: "t", OrganizationCode: "o", Priority: 5})
+
+	body := []byte(`{"id":"live","alias":"main-live","priority":7,"note":"备注"}`)
+	if resp := a.handleManagement(managementRequest{Method: "POST", Path: "/accounts/update", Body: body}); resp.StatusCode != 200 {
+		t.Fatalf("rename failed: %s", resp.Body)
+	}
+	account := a.pool.get("live")
+	if account == nil {
+		t.Fatal("rename moved the account id, which would orphan the host credential file")
+	}
+	account.mu.Lock()
+	alias, prio, note := account.Alias, account.Priority, account.Note
+	account.mu.Unlock()
+	if alias != "main-live" || prio != 7 || note != "备注" {
+		t.Fatalf("rename result: %q %d %q", alias, prio, note)
+	}
+	if a.pool.get("main-live") != nil {
+		t.Fatal("a second account was created under the new alias")
+	}
+
+	// A duplicate alias is refused rather than silently shadowing.
+	a.pool.put(&credential{ID: "other", Alias: "other", Authorization: "t", OrganizationCode: "o"})
+	dup := []byte(`{"id":"other","alias":"main-live"}`)
+	if resp := a.handleManagement(managementRequest{Method: "POST", Path: "/accounts/update", Body: dup}); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("duplicate alias accepted: %d %s", resp.StatusCode, resp.Body)
+	}
+	// Non-ASCII aliases are rejected with an explanation.
+	bad := []byte(`{"id":"other","alias":"主号"}`)
+	if resp := a.handleManagement(managementRequest{Method: "POST", Path: "/accounts/update", Body: bad}); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("bad alias accepted: %d %s", resp.StatusCode, resp.Body)
+	}
+}

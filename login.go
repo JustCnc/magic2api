@@ -290,7 +290,9 @@ func (a *app) findAccountForLogin(alias, phone, authorization string) *credentia
 	userID := jwtSubject(authorization)
 	for _, account := range a.pool.snapshot() {
 		account.mu.Lock()
-		match := (phone != "" && account.Phone == phone) || (userID != "" && account.UserID == userID)
+		match := (phone != "" && account.Phone == phone) ||
+			(userID != "" && account.UserID == userID) ||
+			(alias != "" && account.Alias == alias)
 		account.mu.Unlock()
 		if match {
 			return account

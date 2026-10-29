@@ -60,6 +60,10 @@ type Config struct {
 	// DailyPointsEnabled claims the daily login gift and the manual onboarding
 	// rewards for every account.
 	DailyPointsEnabled bool `yaml:"daily_points_enabled"`
+	// PointsScheduleTime is the wall clock (HH:MM, server timezone) after which
+	// the daily claims start. Failures are retried every half hour while the day
+	// lasts; nothing is claimed before this time.
+	PointsScheduleTime string `yaml:"points_schedule_time"`
 
 	// ProxyURL routes upstream calls through an HTTP proxy (empty = direct).
 	ProxyURL string `yaml:"proxy_url"`
@@ -68,6 +72,7 @@ type Config struct {
 }
 
 const (
+	defaultPointsSchedule = "09:05"
 	defaultBaseURL        = "https://i-magic-service.letsmagic.cn"
 	defaultAccountBaseURL = "https://i-keewood-service.teamshare.cn"
 	defaultDataDir        = "./plugin-data/magic2api"
@@ -89,6 +94,7 @@ func defaultConfig() Config {
 		MaxAttempts:           3,
 		PointsLogging:         true,
 		DailyPointsEnabled:    true,
+		PointsScheduleTime:    defaultPointsSchedule,
 	}
 }
 
@@ -148,6 +154,9 @@ func (c *Config) normalize() error {
 	c.ModelPrefix = strings.Trim(strings.TrimSpace(c.ModelPrefix), "/")
 	if c.ModelPrefix == "" {
 		c.ModelPrefix = defaultModelPrefix
+	}
+	if _, ok := parseClock(c.PointsScheduleTime); !ok {
+		c.PointsScheduleTime = defaultPointsSchedule
 	}
 	if c.ImportInterval <= 0 {
 		c.ImportInterval = 30

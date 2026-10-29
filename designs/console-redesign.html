@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Magic2API 控制台 · 重新设计稿</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f5f6f8; --panel: #ffffff; --panel2: #f3f5f8; --line: #e2e6ee;
+    --text: #1e2430; --muted: #6b7280; --accent: #2f6bff; --accent-soft: #eaf0ff;
+    --ok: #0f9d58; --ok-soft: #f0faf4; --warn: #a86700; --warn-soft: #fff8e6;
+    --err: #d93025; --err-soft: #fdf2f1; --hover: #f7f9fc;
+    --shadow: 0 1px 2px rgba(20,30,50,.05), 0 10px 26px rgba(20,30,50,.07);
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.55 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  button { font: inherit; color: inherit; }
+  h1, h2, h3, h4 { margin: 0; font-weight: 600; }
+
+  /* ---------- shell ---------- */
+  header.top {
+    position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 14px;
+    padding: 12px 22px; background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .logo {
+    width: 28px; height: 28px; border-radius: 8px; background: var(--accent);
+    display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 13px;
+  }
+  .brand h1 { font-size: 15px; }
+  .ver { color: var(--muted); font-size: 12px; }
+  .spacer { flex: 1; }
+  .conn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
+
+  nav.tabs { display: flex; gap: 4px; padding: 10px 22px 0; flex-wrap: wrap; }
+  nav.tabs button {
+    background: transparent; border: 1px solid transparent; border-bottom: 0;
+    color: var(--muted); padding: 8px 14px; border-radius: 10px 10px 0 0; cursor: pointer; font-size: 13px;
+  }
+  nav.tabs button.active { background: var(--panel); color: var(--text); border-color: var(--line); }
+  nav.tabs button .badge {
+    margin-left: 6px; font-size: 11px; color: var(--accent); background: var(--accent-soft);
+    border-radius: 999px; padding: 0 6px;
+  }
+
+  main { padding: 0 22px 40px; }
+  .page { display: none; }
+  .page.active { display: block; }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin: 14px 0; }
+  .card > .head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .card > .head h2 { font-size: 14px; }
+  .hint { color: var(--muted); font-size: 12px; }
+
+  /* ---------- controls ---------- */
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+    border-radius: 8px; border: 1px solid var(--line); background: var(--panel);
+    padding: 7px 12px; font-size: 13px; white-space: nowrap;
+  }
+  .btn:hover { background: var(--hover); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { filter: brightness(1.05); }
+  .btn.ghost { background: transparent; }
+  .btn.danger { color: var(--err); border-color: #f3c3c0; background: var(--err-soft); }
+  .btn.sm { padding: 4px 9px; font-size: 12px; border-radius: 7px; }
+  .btn[disabled] { opacity: .5; cursor: not-allowed; }
+
+  input[type=text], input[type=password], input[type=number], input[type=search], select, textarea {
+    width: 100%; background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 8px 10px; font: inherit; font-size: 13px;
+  }
+  input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+  label.field { display: block; }
+  label.field > .lbl { display: block; color: var(--muted); font-size: 12px; margin-bottom: 5px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row > * { flex: 1 1 200px; }
+
+  .switch { position: relative; display: inline-block; width: 38px; height: 22px; flex: 0 0 auto; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .switch .track {
+    position: absolute; inset: 0; background: #cfd6e4; border-radius: 999px; transition: .15s; cursor: pointer;
+  }
+  .switch .track::after {
+    content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%;
+    background: #fff; top: 3px; left: 3px; transition: .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2);
+  }
+  .switch input:checked + .track { background: var(--ok); }
+  .switch input:checked + .track::after { transform: translateX(16px); }
+  .inline { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; }
+  .inline input[type=checkbox] { width: auto; }
+
+  .pill { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line); }
+  .pill.ok { color: var(--ok); border-color: #b3ddc5; background: var(--ok-soft); }
+  .pill.warn { color: var(--warn); border-color: #ecd9a8; background: var(--warn-soft); }
+  .pill.err { color: var(--err); border-color: #f3c3c0; background: var(--err-soft); }
+  .pill.info { color: var(--accent); border-color: #c9d9ff; background: var(--accent-soft); }
+
+  /* ---------- tables ---------- */
+  .scroll { max-height: 520px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; vertical-align: middle; }
+  th { position: sticky; top: 0; background: var(--panel2); color: var(--muted); font-weight: 500; z-index: 1; font-size: 12px; }
+  tbody tr:hover { background: var(--hover); }
+  tbody tr:last-child td { border-bottom: 0; }
+  .sub { color: var(--muted); font-size: 11px; }
+  .actions { display: flex; gap: 6px; }
+
+  /* priority editor */
+  .prio { display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--panel); }
+  .prio button { background: var(--panel); border: 0; padding: 2px 7px; cursor: pointer; color: var(--muted); font-size: 13px; }
+  .prio button:hover { background: var(--hover); color: var(--text); }
+  .prio .val { min-width: 34px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 13px; }
+  .prio .val.top { color: var(--accent); }
+  .drag { cursor: grab; color: #b9c1cf; user-select: none; }
+
+  /* ---------- modals ---------- */
+  .backdrop {
+    position: fixed; inset: 0; background: rgba(18,24,36,.42); backdrop-filter: blur(1.5px);
+    display: none; align-items: flex-start; justify-content: center; z-index: 60; padding: 48px 16px;
+    overflow: auto;
+  }
+  .backdrop.open { display: flex; }
+  .modal {
+    width: 100%; max-width: 620px; background: var(--panel); border-radius: 14px; box-shadow: var(--shadow);
+    border: 1px solid var(--line); animation: pop .16s ease-out;
+  }
+  .modal.wide { max-width: 720px; }
+  @keyframes pop { from { transform: translateY(-6px); opacity: .6; } to { transform: none; opacity: 1; } }
+  .modal header { display: flex; align-items: center; gap: 10px; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+  .modal header h3 { font-size: 15px; }
+  .modal header .x { margin-left: auto; border: 0; background: transparent; cursor: pointer; color: var(--muted); font-size: 18px; line-height: 1; padding: 2px 6px; border-radius: 6px; }
+  .modal header .x:hover { background: var(--hover); color: var(--text); }
+  .modal .body { padding: 18px 20px; display: grid; gap: 14px; }
+  .modal footer { display: flex; gap: 10px; justify-content: flex-end; padding: 14px 20px; border-top: 1px solid var(--line); background: var(--panel2); border-radius: 0 0 14px 14px; }
+
+  .seg { display: inline-flex; background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 3px; gap: 3px; flex-wrap: wrap; }
+  .seg button { border: 0; background: transparent; padding: 7px 13px; border-radius: 8px; cursor: pointer; font-size: 13px; color: var(--muted); }
+  .seg button.active { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(20,30,50,.08); }
+  .pane { display: none; }
+  .pane.active { display: grid; gap: 14px; }
+
+  .section-title { font-size: 12px; color: var(--muted); text-transform: none; letter-spacing: .02em; margin: 4px 0 -4px; }
+  .note-box { background: var(--warn-soft); border: 1px solid #ecd9a8; color: var(--warn); border-radius: 10px; padding: 10px 12px; font-size: 12px; }
+  .kv { display: grid; grid-template-columns: 96px 1fr; gap: 6px 12px; font-size: 13px; }
+  .kv .k { color: var(--muted); }
+
+  /* ---------- points page ---------- */
+  .points-layout { display: grid; grid-template-columns: 300px 1fr; gap: 14px; align-items: start; }
+  @media (max-width: 900px) { .points-layout { grid-template-columns: 1fr; } }
+
+  .acct-list { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+  .acct-list .search { padding: 12px; border-bottom: 1px solid var(--line); }
+  .acct-item {
+    display: grid; grid-template-columns: 34px 1fr auto; gap: 10px; align-items: center;
+    padding: 12px 14px; cursor: pointer; border-bottom: 1px solid var(--line); border-left: 3px solid transparent;
+  }
+  .acct-item:last-child { border-bottom: 0; }
+  .acct-item:hover { background: var(--hover); }
+  .acct-item.active { background: var(--accent-soft); border-left-color: var(--accent); }
+  .avatar {
+    width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center;
+    background: var(--panel2); color: var(--muted); font-weight: 600; font-size: 13px; border: 1px solid var(--line);
+  }
+  .acct-item.active .avatar { background: #fff; color: var(--accent); border-color: #c9d9ff; }
+  .acct-item .name { font-size: 13px; font-weight: 600; }
+  .acct-item .meta { font-size: 11px; color: var(--muted); }
+  .acct-item .bal { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+  .acct-item .bal small { display: block; font-weight: 400; color: var(--muted); font-size: 11px; }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
+  .stat { border: 1px solid var(--line); background: var(--panel2); border-radius: 10px; padding: 12px 14px; }
+  .stat .k { color: var(--muted); font-size: 12px; }
+  .stat .v { font-size: 22px; font-weight: 650; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .stat .v small { font-size: 12px; font-weight: 400; color: var(--muted); }
+  .stat.accent { background: var(--accent-soft); border-color: #c9d9ff; }
+  .stat.accent .v { color: var(--accent); }
+
+  .tasks { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+  .task { border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: grid; gap: 6px; background: var(--panel); }
+  .task .t { font-size: 13px; font-weight: 600; }
+  .task .d { font-size: 11px; color: var(--muted); }
+  .task .foot { display: flex; align-items: center; gap: 8px; }
+  .task .reward { margin-left: auto; color: var(--accent); font-weight: 600; font-size: 13px; }
+
+  .empty { display: grid; place-items: center; gap: 8px; padding: 64px 20px; color: var(--muted); text-align: center; }
+  .empty .big { font-size: 34px; opacity: .5; }
+
+  .toasts { position: fixed; right: 18px; bottom: 18px; display: grid; gap: 8px; z-index: 90; }
+  .toast {
+    background: var(--panel); border: 1px solid var(--line); box-shadow: var(--shadow);
+    border-radius: 10px; padding: 10px 14px; font-size: 13px; animation: pop .16s ease-out;
+  }
+  .toast.ok { border-color: #b3ddc5; background: var(--ok-soft); }
+  .toast.err { border-color: #f3c3c0; background: var(--err-soft); }
+
+  .design-note {
+    margin: 14px 22px 0; border: 1px dashed #c9d9ff; background: var(--accent-soft); color: #26418f;
+    border-radius: 10px; padding: 10px 14px; font-size: 12px;
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <div class="logo">M</div>
+    <div>
+      <h1>Magic2API 控制台</h1>
+      <div class="ver">v0.1.9 · 设计稿</div>
+    </div>
+  </div>
+  <div class="spacer"></div>
+  <span class="conn"><span class="dot"></span> CPA 已连接 · 管理密钥已保存</span>
+  <button class="btn ghost sm" onclick="toast('已刷新','ok')">刷新</button>
+</header>
+
+<div class="design-note">
+  设计稿：账号页支持「添加账号弹窗 / 逐账号编辑 / 自定义优先级」，积分页改为「账号列表 → 点击查看详情」的两栏结构。
+  下面所有按钮都可点击体验（假数据）。
+</div>
+
+<nav class="tabs" id="tabs">
+  <button data-page="accounts" class="active">账号 <span class="badge">3</span></button>
+  <button data-page="points">积分</button>
+  <button data-page="models">模型</button>
+  <button data-page="requests">请求</button>
+  <button data-page="logs">日志</button>
+  <button data-page="settings">设置</button>
+</nav>
+
+<main>
+  <!-- ============ 账号 ============ -->
+  <section class="page active" id="page-accounts">
+    <div class="card">
+      <div class="head">
+        <h2>账号池</h2>
+        <span class="pill info">3 个 · 可用 2</span>
+        <span class="hint">优先级数值越大越先被选中；可直接在行内调整，或拖动排序</span>
+        <span class="spacer"></span>
+        <button class="btn ghost" onclick="toast('已导出 magic2api-accounts-20261029-1530.json','ok')">导出全部</button>
+        <button class="btn primary" onclick="openAdd()">＋ 添加账号</button>
+      </div>
+
+      <div class="row" style="margin-bottom:12px">
+        <input type="search" placeholder="搜索别名 / 手机号 / 用户 id" style="flex:2 1 260px" />
+        <select style="flex:0 1 160px">
+          <option>全部状态</option><option>可用</option><option>需重登</option><option>冷却中</option><option>已禁用</option>
+        </select>
+        <select style="flex:0 1 160px">
+          <option>按优先级排序</option><option>按剩余天数排序</option><option>按今日消耗排序</option>
+        </select>
+      </div>
+
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th style="width:28px"></th>
+              <th style="width:110px">优先级</th>
+              <th>别名 / 来源</th>
+              <th>用户</th>
+              <th>设备</th>
+              <th>api-key</th>
+              <th>登录令牌</th>
+              <th>状态</th>
+              <th style="width:250px">操作</th>
+            </tr>
+          </thead>
+          <tbody id="acctRows"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 积分 ============ -->
+  <section class="page" id="page-points">
+    <!-- 汇总条：所有账号合计 -->
+    <div class="card" style="margin-bottom:0">
+      <div class="head">
+        <h2>积分总览</h2>
+        <span class="hint">全部 3 个账号合计，最后刷新 15:30:12</span>
+        <span class="spacer"></span>
+        <button class="btn ghost sm" onclick="toast('正在刷新全部账号积分…','ok')">刷新全部</button>
+        <button class="btn sm" onclick="toast('已领取 2 个账号的每日登录奖励，共 +400','ok')">全部领每日</button>
+        <button class="btn primary sm" onclick="toast('已领取全部可领任务，共 +800','ok')">全部领任务</button>
+      </div>
+      <div class="stats">
+        <div class="stat accent"><div class="k">总积分</div><div class="v">15,660</div></div>
+        <div class="stat"><div class="k">今日消耗</div><div class="v">2,280 <small>积分</small></div></div>
+        <div class="stat"><div class="k">今日已领奖励</div><div class="v">+200 <small>1/3 账号已领</small></div></div>
+        <div class="stat"><div class="k">可领任务 / 奖励</div><div class="v">9 <small>约 +2,600</small></div></div>
+      </div>
+    </div>
+
+    <!-- 定时任务 -->
+    <div class="card">
+      <div class="head">
+        <h2>定时领取</h2>
+        <span class="hint">到点自动跑一轮：领完打勾，失败写日志并在状态列标红</span>
+        <span class="spacer"></span>
+        <button class="btn ghost sm" onclick="toast('已触发一轮定时领取（全部账号）','ok')">立即执行一次</button>
+      </div>
+      <div class="row" style="align-items:flex-end">
+        <label class="field" style="flex:0 0 210px"><span class="lbl">每日登录奖励</span>
+          <div class="inline"><label class="switch"><input type="checkbox" checked /><span class="track"></span></label> 已开启</div>
+        </label>
+        <label class="field" style="flex:0 0 160px"><span class="lbl">执行时间</span><input type="text" value="09:05" /></label>
+        <label class="field" style="flex:0 0 210px"><span class="lbl">新人 / 成长任务</span>
+          <div class="inline"><label class="switch"><input type="checkbox" checked /><span class="track"></span></label> 已开启</div>
+        </label>
+        <label class="field" style="flex:0 0 160px"><span class="lbl">执行时间</span><input type="text" value="09:10" /></label>
+        <label class="field"><span class="lbl">作用范围</span>
+          <select><option>全部账号</option><option>仅可用账号</option><option>仅指定账号</option></select>
+        </label>
+      </div>
+      <div class="kv" style="margin-top:12px">
+        <span class="k">下次执行</span><span>2026-10-30 09:05:00（还有 17 小时 35 分）</span>
+        <span class="k">上次执行</span><span>2026-10-29 09:05:02 · 3 个账号：成功 2，已领过 1，失败 0</span>
+        <span class="k">累计收益</span><span>+1,800 积分（近 7 天）</span>
+      </div>
+    </div>
+
+    <div class="points-layout" style="margin-top:14px">
+      <!-- 左：账号列表 -->
+      <div class="acct-list">
+        <div class="search">
+          <input type="search" placeholder="搜索账号" />
+          <div class="hint" style="margin-top:8px">合计 <b>15,660</b> 积分 · 3 个账号</div>
+        </div>
+        <div id="pointsList"></div>
+      </div>
+
+      <!-- 右：详情 -->
+      <div id="pointsDetail">
+        <div class="card">
+          <div class="empty">
+            <div class="big">◔</div>
+            <div>左侧选一个账号，查看它的积分余额、任务与流水</div>
+            <div class="hint">选中后会记住，刷新页面仍停在这个账号</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="page" id="page-models"><div class="card"><div class="empty">（本次不涉及，保持现状）</div></div></section>
+  <section class="page" id="page-requests"><div class="card"><div class="empty">（本次不涉及，保持现状）</div></div></section>
+  <section class="page" id="page-logs"><div class="card"><div class="empty">（本次不涉及，保持现状）</div></div></section>
+  <section class="page" id="page-settings"><div class="card"><div class="empty">（本次不涉及，保持现状）</div></div></section>
+</main>
+
+<!-- ============ 添加账号弹窗 ============ -->
+<div class="backdrop" id="modalAdd">
+  <div class="modal wide" role="dialog" aria-modal="true">
+    <header>
+      <h3>添加账号</h3>
+      <span class="hint">登录成功后自动铸造 api-key 并写入账号池</span>
+      <button class="x" onclick="closeModal('modalAdd')">✕</button>
+    </header>
+    <div class="body">
+      <div class="seg" id="addSeg">
+        <button class="active" data-pane="pane-pwd">手机号 + 密码</button>
+        <button data-pane="pane-sms">短信验证码</button>
+        <button data-pane="pane-jwt">粘贴登录态</button>
+        <button data-pane="pane-file">导入文件</button>
+      </div>
+
+      <!-- 密码 -->
+      <div class="pane active" id="pane-pwd">
+        <div class="row">
+          <label class="field"><span class="lbl">手机号</span><input type="text" placeholder="13800000000" /></label>
+          <label class="field"><span class="lbl">密码</span><input type="password" placeholder="账号密码（无需验证码）" /></label>
+        </div>
+        <label class="inline"><input type="checkbox" /> 记住密码，到期前自动重新登录（30 天令牌只能靠重登续期）</label>
+        <div class="note-box">勾选后密码会明文存放在插件数据目录，跟 token 同级；可随时在账号「编辑」里关掉。</div>
+      </div>
+
+      <!-- 短信 -->
+      <div class="pane" id="pane-sms">
+        <div class="row">
+          <label class="field"><span class="lbl">手机号</span><input type="text" placeholder="13800000000" /></label>
+          <label class="field"><span class="lbl">图形验证码（拖动把图片转正）</span>
+            <div class="inline"><button class="btn ghost sm" onclick="toast('已获取图形验证码','ok')">获取</button><span class="hint">未获取</span></div>
+          </label>
+        </div>
+        <div class="row">
+          <label class="field"><span class="lbl">短信验证码</span><input type="text" placeholder="6 位数字" /></label>
+        </div>
+      </div>
+
+      <!-- JWT -->
+      <div class="pane" id="pane-jwt">
+        <label class="field"><span class="lbl">登录态 JSON</span>
+          <textarea rows="5" placeholder='{"authorization":"eyJ...","organization_code":"h70imn51gp0f"}'></textarea>
+        </label>
+        <div class="hint">可以从桌面端 <code>MAGIC:user:authorization</code>、网页版 localStorage 或任意请求头里取。</div>
+      </div>
+
+      <!-- 文件 -->
+      <div class="pane" id="pane-file">
+        <div class="note-box">拖一个账号 JSON（本插件导出的记录、或任意带 <code>authorization</code> 的 JSON）到这里。</div>
+        <div class="row"><input type="text" placeholder="或粘贴文件路径" /></div>
+      </div>
+
+      <div class="section-title">可选</div>
+      <div class="row">
+        <label class="field"><span class="lbl">别名（默认按手机号后四位）</span><input type="text" placeholder="主号" /></label>
+        <label class="field"><span class="lbl">优先级</span><input type="number" value="5" min="1" max="99" /></label>
+      </div>
+      <label class="field"><span class="lbl">备注</span><input type="text" placeholder="例如：朋友的号，晚上别用" /></label>
+    </div>
+    <footer>
+      <button class="btn ghost" onclick="closeModal('modalAdd')">取消</button>
+      <button class="btn primary" onclick="closeModal('modalAdd'); toast('登录成功：主号，api-key 已铸造','ok')">登录并添加</button>
+    </footer>
+  </div>
+</div>
+
+<!-- ============ 编辑账号弹窗 ============ -->
+<div class="backdrop" id="modalEdit">
+  <div class="modal" role="dialog" aria-modal="true">
+    <header>
+      <h3>编辑账号 <span class="hint" id="editTitle">live</span></h3>
+      <button class="x" onclick="closeModal('modalEdit')">✕</button>
+    </header>
+    <div class="body">
+      <div class="section-title">基本信息</div>
+      <div class="row">
+        <label class="field"><span class="lbl">别名（重命名会移动账号 id，历史日志保留旧 id）</span><input type="text" id="editAlias" value="live" /></label>
+        <label class="field"><span class="lbl">优先级（越大越先选）</span><input type="number" id="editPrio" value="5" min="1" max="99" /></label>
+      </div>
+      <label class="field"><span class="lbl">备注</span><input type="text" id="editNote" placeholder="例如：朋友的号，晚上别用" /></label>
+
+      <div class="section-title">调度</div>
+      <div class="row" style="align-items:center">
+        <div class="inline"><label class="switch"><input type="checkbox" checked /><span class="track"></span></label> 启用（关掉后不参与选号）</div>
+        <div class="inline"><label class="switch"><input type="checkbox" /><span class="track"></span></label> 标记已注销（dead）</div>
+      </div>
+      <div class="kv">
+        <span class="k">冷却至</span><span>—</span>
+        <span class="k">最近成功</span><span>2026-10-29 15:02:11</span>
+        <span class="k">失败次数</span><span>0</span>
+      </div>
+
+      <div class="section-title">登录态（30 天，无法续期）</div>
+      <div class="row">
+        <label class="field"><span class="lbl">手机号</span><input type="text" id="editPhone" value="15600002610" /></label>
+        <label class="field"><span class="lbl">密码</span><input type="password" value="••••••••" /></label>
+      </div>
+      <div class="inline"><label class="switch"><input type="checkbox" /><span class="track"></span></label> 到期自动重登（保存密码，到期前 48h 自动登录）</div>
+      <div class="kv">
+        <span class="k">令牌到期</span><span id="editJwt">2026-11-28 10:58:50 · 剩 29 天</span>
+        <span class="k">用户 id</span><span>974262954061238274</span>
+      </div>
+
+      <div class="section-title">设备</div>
+      <div class="row">
+        <label class="field"><span class="lbl">设备名</span><input type="text" id="editDevice" value="Chrome 138.0.0.0" /></label>
+        <label class="field"><span class="lbl">设备 id（只读）</span><input type="text" value="d42d8a1e3f750d0b…" disabled /></label>
+      </div>
+    </div>
+    <footer>
+      <button class="btn danger" style="margin-right:auto" onclick="closeModal('modalEdit'); toast('已删除账号 live','ok')">删除账号</button>
+      <button class="btn ghost" onclick="closeModal('modalEdit')">取消</button>
+      <button class="btn primary" onclick="closeModal('modalEdit'); toast('已保存','ok')">保存</button>
+    </footer>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script>
+/* ---------------- mock data ---------------- */
+const accounts = [
+  { id: 'live', alias: 'live', source: 'config', nickname: '1', phone: '156****2610', phoneRaw: '15600002610', prio: 9,
+    note: '桌面端导出', device: 'Chrome 138.0.0.0', keyOk: true, keyExp: '16:59', jwtDays: 29, jwtExp: '11-28 10:58',
+    state: 'ok', balance: 12480, todayUsed: 1860 },
+  { id: 'phone-8801', alias: 'phone-8801', source: 'login', nickname: '阿伟', phone: '138****8801', phoneRaw: '13800008801', prio: 5,
+    note: '', device: 'iPhone 17,2', keyOk: true, keyExp: '17:12', jwtDays: 21, jwtExp: '11-20 09:31',
+    state: 'ok', balance: 3060, todayUsed: 420 },
+  { id: 'import-9f2c', alias: 'import-9f2c', source: 'import', nickname: '—', phone: '', phoneRaw: '', prio: 1,
+    note: '待重登', device: 'Windows 10', keyOk: false, keyExp: '—', jwtDays: 3, jwtExp: '11-01 22:04',
+    state: 'relogin', balance: 120, todayUsed: 0 },
+];
+
+const points = {
+  live: {
+    balance: 12480, giftToday: 200, usedToday: 1860, pendingTasks: 2,
+    tasks: [
+      { t: '绑定手机号', d: '已完成', r: '+300', done: true },
+      { t: '首次对话', d: '已完成', r: '+100', done: true },
+      { t: '邀请一位同事', d: '可领取', r: '+500', done: false },
+      { t: '完善团队资料', d: '可领取', r: '+200', done: false },
+    ],
+    ledger: [
+      { time: '10-29 14:32', type: '模型消耗', model: 'glm-5.1', amount: -68 },
+      { time: '10-29 14:10', type: '模型消耗', model: 'deepseek-v4.1-flash', amount: -12 },
+      { time: '10-29 09:02', type: '每日登录', model: '—', amount: +200 },
+      { time: '10-28 22:41', type: '模型消耗', model: 'glm-5.3', amount: -240 },
+      { time: '10-28 11:20', type: '新人任务', model: '首次对话', amount: +100 },
+      { time: '10-27 18:05', type: '模型消耗', model: 'glm-5.1', amount: -96 },
+    ],
+  },
+  'phone-8801': {
+    balance: 3060, giftToday: 0, usedToday: 420, pendingTasks: 3,
+    tasks: [
+      { t: '绑定手机号', d: '已完成', r: '+300', done: true },
+      { t: '首次对话', d: '可领取', r: '+100', done: false },
+      { t: '邀请一位同事', d: '可领取', r: '+500', done: false },
+      { t: '完善团队资料', d: '可领取', r: '+200', done: false },
+    ],
+    ledger: [
+      { time: '10-29 15:01', type: '模型消耗', model: 'glm-5.1', amount: -84 },
+      { time: '10-29 10:12', type: '模型消耗', model: 'qwen-max', amount: -36 },
+      { time: '10-28 09:00', type: '每日登录', model: '—', amount: +200 },
+    ],
+  },
+  'import-9f2c': {
+    balance: 120, giftToday: 0, usedToday: 0, pendingTasks: 4,
+    tasks: [
+      { t: '绑定手机号', d: '可领取', r: '+300', done: false },
+      { t: '首次对话', d: '可领取', r: '+100', done: false },
+      { t: '邀请一位同事', d: '可领取', r: '+500', done: false },
+      { t: '完善团队资料', d: '可领取', r: '+200', done: false },
+    ],
+    ledger: [
+      { time: '10-20 12:00', type: '注册奖励', model: '—', amount: +120 },
+    ],
+  },
+};
+
+/* ---------------- helpers ---------------- */
+const $ = s => document.querySelector(s);
+const money = n => (n > 0 ? '+' : '') + n.toLocaleString('zh-CN');
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function toast(message, kind) {
+  const el = document.createElement('div');
+  el.className = 'toast ' + (kind || '');
+  el.textContent = message;
+  $('#toasts').appendChild(el);
+  setTimeout(() => el.remove(), 3200);
+}
+function openAdd() { $('#modalAdd').classList.add('open'); }
+function openEdit(id) {
+  const a = accounts.find(x => x.id === id) || {};
+  $('#editTitle').textContent = a.alias || id;
+  $('#editAlias').value = a.alias || id;
+  $('#editPrio').value = a.prio || 5;
+  $('#editPhone').value = a.phoneRaw || '';
+  $('#editNote').value = a.note || '';
+  $('#editDevice').value = a.device || '';
+  $('#editJwt').textContent = (a.jwtExp || '—') + (a.jwtDays != null ? ' · 剩 ' + a.jwtDays + ' 天' : '');
+  $('#modalEdit').classList.add('open');
+}
+function closeModal(id) { $('#' + id).classList.remove('open'); }
+document.querySelectorAll('.backdrop').forEach(bd => {
+  bd.addEventListener('click', e => { if (e.target === bd) bd.classList.remove('open'); });
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') document.querySelectorAll('.backdrop.open').forEach(el => el.classList.remove('open'));
+});
+
+/* ---------------- tabs ---------------- */
+$('#tabs').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-page]');
+  if (!btn) return;
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b === btn));
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  $('#page-' + btn.dataset.page).classList.add('active');
+});
+
+/* ---------------- 添加账号：分段 ---------- */
+$('#addSeg').addEventListener('click', e => {
+  const btn = e.target.closest('button[data-pane]');
+  if (!btn) return;
+  document.querySelectorAll('#addSeg button').forEach(b => b.classList.toggle('active', b === btn));
+  document.querySelectorAll('#modalAdd .pane').forEach(p => p.classList.remove('active'));
+  $('#' + btn.dataset.pane).classList.add('active');
+});
+
+/* ---------------- 账号表 ---------------- */
+const stateOf = a => a.state === 'ok'
+  ? '<span class="pill ok">可用</span>'
+  : a.state === 'relogin'
+    ? '<span class="pill err">需重登</span>'
+    : '<span class="pill warn">冷却中</span>';
+
+function rowHtml(a) {
+  return `<tr data-id="${esc(a.id)}">
+    <td><span class="drag" title="拖动排序">⠿</span></td>
+    <td>
+      <div class="prio">
+        <button data-prio="-" title="降一级">−</button>
+        <span class="val ${a.prio >= 9 ? 'top' : ''}">${a.prio}</span>
+        <button data-prio="+" title="升一级">＋</button>
+      </div>
+    </td>
+    <td>${esc(a.alias)}<div class="sub">${esc(a.source)}</div></td>
+    <td>${esc(a.nickname)}<div class="sub">${esc(a.phone || '—')}</div></td>
+    <td>${esc(a.device)}</td>
+    <td>${a.keyOk ? '<span class="pill ok">有效</span>' : '<span class="pill warn">待续期</span>'}<div class="sub">${a.keyExp}</div></td>
+    <td>${a.jwtDays <= 7 ? `<span class="pill warn">剩 ${a.jwtDays} 天</span>` : `<span class="pill ok">剩 ${a.jwtDays} 天</span>`}<div class="sub">至 ${a.jwtExp}</div></td>
+    <td>${stateOf(a)}</td>
+    <td>
+      <div class="actions">
+        <button class="btn ghost sm" data-act="edit">编辑</button>
+        <button class="btn ghost sm" data-act="relogin">重登</button>
+        <button class="btn ghost sm" data-act="export">导出</button>
+        <button class="btn ghost sm" data-act="more">更多 ▾</button>
+      </div>
+    </td>
+  </tr>`;
+}
+
+function renderAccounts() {
+  // 行序跟选号顺序一致：优先级高的在上面，同优先级按别名
+  const ordered = accounts.slice().sort((a, b) => b.prio - a.prio || a.alias.localeCompare(b.alias));
+  $('#acctRows').innerHTML = ordered.map(rowHtml).join('');
+}
+
+$('#acctRows').addEventListener('click', e => {
+  const prioBtn = e.target.closest('button[data-prio]');
+  const row = e.target.closest('tr[data-id]');
+  if (!row) return;
+  const account = accounts.find(a => a.id === row.dataset.id);
+  if (!account) return;
+
+  if (prioBtn) {
+    account.prio = Math.max(1, Math.min(99, account.prio + (prioBtn.dataset.prio === '+' ? 1 : -1)));
+    renderAccounts();
+    renderPointsList();
+    toast(`「${account.alias}」优先级 = ${account.prio}（表已按优先级重排）`, 'ok');
+    return;
+  }
+  const act = e.target.closest('button[data-act]');
+  if (!act) return;
+  if (act.dataset.act === 'edit') return openEdit(account.id);
+  if (act.dataset.act === 'relogin') return toast(`正在用密码重新登录「${account.alias}」…`, 'ok');
+  if (act.dataset.act === 'export') return toast(`已导出 ${account.id}.json`, 'ok');
+  if (act.dataset.act === 'more') return toast('更多：启停 / 复活 / 删除 / 关闭自动重登');
+});
+
+/* ---------------- 积分 ---------------- */
+let selected = null;
+
+function renderPointsList() {
+  $('#pointsList').innerHTML = accounts.map(a => `
+    <div class="acct-item ${selected === a.id ? 'active' : ''}" data-id="${esc(a.id)}">
+      <div class="avatar">${esc((a.nickname !== '—' ? a.nickname : a.alias).slice(0, 1).toUpperCase())}</div>
+      <div>
+        <div class="name">${esc(a.alias)}</div>
+        <div class="meta">${esc(a.phone || '未绑定')} · 今日 ${a.todayUsed}</div>
+      </div>
+      <div class="bal">${a.balance.toLocaleString('zh-CN')}<small>积分</small></div>
+    </div>`).join('');
+}
+
+function renderPointsDetail(id) {
+  const a = accounts.find(x => x.id === id);
+  const p = points[id];
+  if (!a || !p) return;
+  $('#pointsDetail').innerHTML = `
+    <div class="card">
+      <div class="head">
+        <h2>${esc(a.alias)}</h2>
+        <span class="pill info">${esc(a.phone || '未绑定')}</span>
+        ${a.state === 'relogin' ? '<span class="pill err">需重登</span>' : '<span class="pill ok">可用</span>'}
+        <span class="spacer"></span>
+        <button class="btn ghost sm" onclick="toast('已刷新「${esc(a.alias)}」积分','ok')">刷新</button>
+        <button class="btn sm" onclick="toast('已领取每日登录奖励 +200','ok')">领每日登录</button>
+        <button class="btn primary sm" onclick="toast('已一键领取 2 个任务','ok')">一键领任务</button>
+      </div>
+      <div class="stats">
+        <div class="stat accent"><div class="k">可用积分</div><div class="v">${p.balance.toLocaleString('zh-CN')}</div></div>
+        <div class="stat"><div class="k">今日登录奖励</div><div class="v">${p.giftToday ? '+' + p.giftToday : '—'} <small>${p.giftToday ? '已领取' : '未领取'}</small></div></div>
+        <div class="stat"><div class="k">今日消耗</div><div class="v">${p.usedToday.toLocaleString('zh-CN')}</div></div>
+        <div class="stat"><div class="k">待领任务</div><div class="v">${p.pendingTasks} <small>个</small></div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="head"><h2>任务板</h2><span class="hint">新人任务，领取后积分立刻到账</span></div>
+      <div class="tasks">
+        ${p.tasks.map(t => `
+          <div class="task">
+            <div class="t">${esc(t.t)}</div>
+            <div class="d">${esc(t.d)}</div>
+            <div class="foot">
+              ${t.done ? '<span class="pill ok">已领取</span>' : `<button class="btn sm primary" onclick="toast('已领取「${esc(t.t)}」${esc(t.r)}','ok')">领取</button>`}
+              <span class="reward">${esc(t.r)}</span>
+            </div>
+          </div>`).join('')}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="head">
+        <h2>积分流水</h2>
+        <span class="hint">按「模型 + 时间窗」与请求日志对账</span>
+        <span class="spacer"></span>
+        <select style="max-width:150px"><option>全部类型</option><option>收入</option><option>支出</option></select>
+        <select style="max-width:150px"><option>个人</option><option>团队</option></select>
+      </div>
+      <div class="scroll" style="max-height:340px">
+        <table>
+          <thead><tr><th>时间</th><th>类型</th><th>明细</th><th style="text-align:right">积分</th></tr></thead>
+          <tbody>
+            ${p.ledger.map(l => `
+              <tr>
+                <td>${esc(l.time)}</td>
+                <td>${esc(l.type)}</td>
+                <td class="sub" style="color:var(--muted)">${esc(l.model)}</td>
+                <td style="text-align:right;font-variant-numeric:tabular-nums;color:${l.amount > 0 ? 'var(--ok)' : 'var(--err)'}">${money(l.amount)}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+$('#pointsList').addEventListener('click', e => {
+  const item = e.target.closest('.acct-item');
+  if (!item) return;
+  selected = item.dataset.id;
+  renderPointsList();
+  renderPointsDetail(selected);
+});
+
+/* ---------------- boot ---------------- */
+renderAccounts();
+renderPointsList();
+</script>
+</body>
+</html>

@@ -342,6 +342,17 @@ func (a *app) ensureHostRecords() {
 	}
 }
 
+// aliasFromAuthFileName recovers the account id from a credential file name of
+// the form magic2api-<id>.json.
+func aliasFromAuthFileName(name string) string {
+	base := strings.TrimSuffix(strings.TrimSpace(name), ".json")
+	prefix := providerKey + "-"
+	if !strings.HasPrefix(base, prefix) {
+		return ""
+	}
+	return sanitizeAlias(strings.TrimPrefix(base, prefix))
+}
+
 func authIDOf(entry hostAuthEntry) string {
 	name := entry.Name
 	if name == "" {
@@ -583,15 +594,24 @@ func (a *app) parseAuth(raw []byte) ([]byte, error) {
 	if strings.TrimSpace(in.Authorization) == "" {
 		return okEnvelope(authParseResponse{Handled: false})
 	}
+	// The file name carries the account id (magic2api-<id>.json); the alias inside
+	// is a display name the user may edit. Keep them separate, otherwise a renamed
+	// account comes back as a second account on the next parse.
+	id := aliasFromAuthFileName(req.FileName)
 	alias := sanitizeAlias(in.Alias)
-	if alias == "" {
-		alias = sanitizeAlias(strings.TrimSuffix(req.FileName, ".json"))
-		alias = strings.TrimPrefix(alias, providerKey+"-")
+	if id == "" {
+		id = alias
 	}
 	if alias == "" {
-		alias = "auth-" + randomHex(3)
+		alias = id
 	}
-	account := accountFromInput(in, alias)
+	if id == "" {
+		id = "auth-" + randomHex(3)
+		alias = id
+	}
+	account := accountFromInput(in, id)
+	// The alias is display-only, so it must not move the id.
+	account.Alias = alias
 	account.Source = "auth-file"
 	account.bucket = newTokenBucket(a.currentConfig().RPM, a.currentConfig().Burst)
 	if in.OrganizationCode == "" {

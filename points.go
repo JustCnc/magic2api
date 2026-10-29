@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -324,7 +325,7 @@ func (a *app) dailyPointsLoop(ctx context.Context) {
 			return
 		case <-timer.C:
 			cfg := a.currentConfig()
-			if cfg.DailyPointsEnabled {
+			if cfg.DailyPointsEnabled && claimWindowOpen(cfg.PointsScheduleTime, time.Now()) {
 				dayMu.Lock()
 				for _, account := range a.pool.snapshot() {
 					if !usable(account) {
@@ -470,4 +471,48 @@ func (a *app) summarizePoints(ctx context.Context, account *credential, includeR
 		}
 	}
 	return out
+}
+
+// parseClock reads an "HH:MM" setting. Anything unparsable is reported as not ok
+// so the caller can fall back to the default instead of disabling the feature.
+func parseClock(value string) (time.Duration, bool) {
+	value = strings.TrimSpace(value)
+	parts := strings.Split(value, ":")
+	if len(parts) != 2 {
+		return 0, false
+	}
+	hour, errHour := strconv.Atoi(strings.TrimSpace(parts[0]))
+	minute, errMinute := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if errHour != nil || errMinute != nil || hour < 0 || hour > 23 || minute < 0 || minute > 59 {
+		return 0, false
+	}
+	return time.Duration(hour)*time.Hour + time.Duration(minute)*time.Minute, true
+}
+
+// claimWindowOpen reports whether today's scheduled claim time has passed.
+func claimWindowOpen(schedule string, now time.Time) bool {
+	at, ok := parseClock(schedule)
+	if !ok {
+		at, _ = parseClock(defaultPointsSchedule)
+	}
+	local := now.In(serverZone)
+	midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, serverZone)
+	return !local.Before(midnight.Add(at))
+}
+
+// pointsScheduleView describes the next and last run for the console.
+func (a *app) pointsScheduleView(cfg Config) map[string]any {
+	at, _ := parseClock(cfg.PointsScheduleTime)
+	local := time.Now().In(serverZone)
+	next := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, serverZone).Add(at)
+	if !next.After(local) {
+		next = next.Add(24 * time.Hour)
+	}
+	return map[string]any{
+		"enabled":  cfg.DailyPointsEnabled,
+		"time":     cfg.PointsScheduleTime,
+		"window":   claimWindowOpen(cfg.PointsScheduleTime, local),
+		"next_run": next.Format(time.RFC3339),
+		"now":      local.Format(time.RFC3339),
+	}
 }

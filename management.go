@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,6 +26,8 @@ func (a *app) managementRegistration() managementRegistration {
 		{http.MethodPost, "/models/refresh", "刷新模型目录"},
 		{http.MethodGet, "/requests", "请求日志"},
 		{http.MethodGet, "/points", "积分与流水"},
+		{http.MethodGet, "/points/summary", "全部账号积分汇总"},
+		{http.MethodPost, "/points/claim-all", "全部账号领取每日积分"},
 		{http.MethodPost, "/points/claim", "领取每日登录积分"},
 		{http.MethodPost, "/points/task", "领取单个新人任务"},
 		{http.MethodGet, "/logs", "运行日志"},
@@ -137,6 +140,10 @@ func (a *app) handleManagement(req managementRequest) managementResponse {
 		return okResponse(a.requests.recent(200))
 	case method == http.MethodGet && path == "/points":
 		return a.managementPoints(req)
+	case method == http.MethodGet && path == "/points/summary":
+		return a.managementPointsSummary(req)
+	case method == http.MethodPost && path == "/points/claim-all":
+		return a.managementClaimAll(req)
 	case method == http.MethodPost && path == "/points/claim":
 		return a.managementClaimGift(req)
 	case method == http.MethodPost && path == "/points/task":
@@ -306,6 +313,7 @@ func (a *app) settingsView() map[string]any {
 		"max_attempts":            cfg.MaxAttempts,
 		"points_logging":          cfg.PointsLogging,
 		"daily_points_enabled":    cfg.DailyPointsEnabled,
+		"points_schedule_time":    cfg.PointsScheduleTime,
 		"proxy_url":               cfg.ProxyURL,
 		"debug_dump":              cfg.DebugDump,
 		"import_interval_seconds": cfg.ImportInterval,
@@ -340,6 +348,11 @@ func (a *app) managementSaveSettings(req managementRequest) managementResponse {
 	}
 	if v, ok := patch["daily_points_enabled"]; ok {
 		cfg.DailyPointsEnabled = toBool(v, cfg.DailyPointsEnabled)
+	}
+	if v, ok := patch["points_schedule_time"]; ok {
+		if s, isString := v.(string); isString && strings.TrimSpace(s) != "" {
+			cfg.PointsScheduleTime = s
+		}
 	}
 	if v, ok := patch["debug_dump"]; ok {
 		cfg.DebugDump = toBool(v, cfg.DebugDump)
@@ -575,6 +588,9 @@ func (a *app) managementUpdateAccount(req managementRequest) managementResponse 
 		Note        *string `json:"note"`
 		Password    *string `json:"password"`
 		AutoRelogin *bool   `json:"auto_relogin"`
+		Alias       *string `json:"alias"`
+		Phone       *string `json:"phone"`
+		DeviceName  *string `json:"device_name"`
 	}
 	if err := json.Unmarshal(req.Body, &patch); err != nil {
 		return failResponse(http.StatusBadRequest, "请求体不是 JSON："+err.Error())
@@ -583,7 +599,35 @@ func (a *app) managementUpdateAccount(req managementRequest) managementResponse 
 	if account == nil {
 		return failResponse(http.StatusNotFound, "账号不存在")
 	}
+	// The alias is a display name: the account id (and therefore the host's
+	// credential file name) stays put, so a rename cannot orphan a credential.
+	if patch.Alias != nil {
+		alias := sanitizeAlias(*patch.Alias)
+		if alias == "" {
+			return failResponse(http.StatusBadRequest, "别名只能包含字母、数字、- _ .（会用作凭据文件名）")
+		}
+		for _, other := range a.pool.snapshot() {
+			if other == account {
+				continue
+			}
+			other.mu.Lock()
+			taken := other.Alias == alias
+			other.mu.Unlock()
+			if taken {
+				return failResponse(http.StatusConflict, "别名已被另一个账号使用："+alias)
+			}
+		}
+	}
 	account.mu.Lock()
+	if patch.Alias != nil {
+		account.Alias = sanitizeAlias(*patch.Alias)
+	}
+	if patch.Phone != nil {
+		account.Phone = strings.TrimSpace(*patch.Phone)
+	}
+	if patch.DeviceName != nil && strings.TrimSpace(*patch.DeviceName) != "" {
+		account.Device.Name = strings.TrimSpace(*patch.DeviceName)
+	}
 	if patch.Priority != nil {
 		account.Priority = *patch.Priority
 	}
@@ -681,6 +725,137 @@ func (a *app) managementPoints(req managementRequest) managementResponse {
 	return okResponse(map[string]any{
 		"account": a.accountView(account),
 		"points":  summary,
+	})
+}
+
+// managementPointsSummary aggregates every account so the console can show the
+// pool total without opening each account. Records are cached for a minute, so
+// refreshing the page does not hammer the upstream.
+func (a *app) managementPointsSummary(req managementRequest) managementResponse {
+	accounts := a.pool.snapshot()
+	type accountPoints struct {
+		ID            string  `json:"id"`
+		Alias         string  `json:"alias"`
+		Phone         string  `json:"phone"`
+		Balance       float64 `json:"balance"`
+		BalanceError  string  `json:"balance_error,omitempty"`
+		TodayGift     float64 `json:"today_gift"`
+		TodayTask     float64 `json:"today_task"`
+		TodayConsumed float64 `json:"today_consumed"`
+		PendingTasks  int     `json:"pending_tasks"`
+		PendingReward float64 `json:"pending_reward"`
+		GiftClaimed   bool    `json:"gift_claimed"`
+		Error         string  `json:"error,omitempty"`
+	}
+
+	rows := make([]accountPoints, len(accounts))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 6)
+	for i, account := range accounts {
+		wg.Add(1)
+		go func(index int, account *credential) {
+			defer wg.Done()
+			defer guard(a, "points-summary")
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+			defer cancel()
+			summary := a.summarizePoints(ctx, account, true)
+
+			row := accountPoints{
+				ID:            account.ID,
+				Alias:         account.Alias,
+				Phone:         maskPhone(account.Phone),
+				Balance:       summary.Balance.TotalPoints.Float64(),
+				BalanceError:  summary.BalanceError,
+				TodayGift:     summary.Today.GiftPoints,
+				TodayTask:     summary.Today.TaskPoints,
+				TodayConsumed: -summary.Today.ConsumedPoints,
+				GiftClaimed:   summary.Today.LastClaimedDate != "",
+			}
+			if row.TodayConsumed < 0 {
+				row.TodayConsumed = 0
+			}
+			for _, task := range summary.Tasks {
+				if task.Status == "PENDING" && task.RewardStatus == "PENDING" && task.Code != "first_ai_work" {
+					row.PendingTasks++
+					row.PendingReward += task.Points.Float64()
+				}
+			}
+			if summary.RecordsError != "" {
+				row.Error = summary.RecordsError
+			}
+			rows[index] = row
+		}(i, account)
+	}
+	wg.Wait()
+
+	total := accountPoints{Alias: "合计"}
+	for _, row := range rows {
+		total.Balance += row.Balance
+		total.TodayGift += row.TodayGift
+		total.TodayTask += row.TodayTask
+		total.TodayConsumed += row.TodayConsumed
+		total.PendingTasks += row.PendingTasks
+		total.PendingReward += row.PendingReward
+		if row.GiftClaimed {
+			total.GiftClaimed = true
+		}
+	}
+	claimed := 0
+	for _, row := range rows {
+		if row.GiftClaimed {
+			claimed++
+		}
+	}
+	return okResponse(map[string]any{
+		"accounts": rows,
+		"totals": map[string]any{
+			"balance":            total.Balance,
+			"today_gift":         total.TodayGift,
+			"today_task":         total.TodayTask,
+			"today_consumed":     total.TodayConsumed,
+			"pending_tasks":      total.PendingTasks,
+			"pending_reward":     total.PendingReward,
+			"accounts":           len(rows),
+			"gift_claimed":       claimed,
+			"gift_claimed_count": claimed,
+		},
+		"schedule":   a.pointsScheduleView(a.currentConfig()),
+		"fetched_at": time.Now().UnixMilli(),
+	})
+}
+
+// managementClaimAll runs the daily claim for every usable account, the same
+// routine the scheduler uses.
+func (a *app) managementClaimAll(req managementRequest) managementResponse {
+	today := time.Now().In(serverZone).Format("2006-01-02")
+	claimed, skipped, failed := 0, 0, 0
+	messages := make([]string, 0, 4)
+	for _, account := range a.pool.snapshot() {
+		if !usable(account) {
+			skipped++
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		ok := a.claimDaily(ctx, account, today)
+		cancel()
+		if ok {
+			claimed++
+		} else {
+			failed++
+			if len(messages) < 3 {
+				messages = append(messages, account.label())
+			}
+		}
+	}
+	return okResponse(map[string]any{
+		"claimed":  claimed,
+		"skipped":  skipped,
+		"failed":   failed,
+		"problems": messages,
+		"message":  fmt.Sprintf("领取完成：成功 %d，跳过 %d，失败 %d", claimed, skipped, failed),
 	})
 }
 
