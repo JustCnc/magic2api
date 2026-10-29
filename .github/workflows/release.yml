@@ -142,7 +142,6 @@ jobs:
           cp dist/plugins/linux/arm64/magic2api.so "$STAGE/plugins/linux/arm64/"
           cp dist/plugins/windows/amd64/magic2api.dll "$STAGE/plugins/windows/amd64/"
           cp README.md config.example.yaml "$STAGE/"
-          cp docs/REVERSE_ENGINEERING.md docs/EVIDENCE.md "$STAGE/"
 
           (
             cd "$STAGE"
