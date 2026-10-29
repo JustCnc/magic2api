@@ -234,7 +234,7 @@
 
 <script>
 const API = location.pathname.replace(/\/ui\/?$/, "").replace(/\/+$/, "");
-const state = { tab: "overview", accounts: [], models: [], captcha: null, pointsAccount: "" };
+const state = { tab: "overview", accounts: [], models: [], captcha: null, pointsAccount: "", loginState: new URLSearchParams(location.search).get("state") || "" };
 
 function toast(message, kind) {
   const box = document.createElement("div");
@@ -390,7 +390,7 @@ document.getElementById("btn-login-password").addEventListener("click", async ev
   if (!phone || !password) { toast("请填写手机号与密码", "err"); return; }
   event.target.disabled = true;
   try {
-    const account = await api("/login/password", { method: "POST", body: JSON.stringify({ phone, password }) });
+    const account = await api("/login/password", { method: "POST", body: JSON.stringify({ phone, password, state: state.loginState }) });
     toast("登录成功：" + account.alias, "ok");
     await loadAccounts();
   } catch (err) { /* shown */ } finally { event.target.disabled = false; }
@@ -434,7 +434,7 @@ document.getElementById("btn-login-sms").addEventListener("click", async event =
   if (!code) { toast("请填写短信验证码", "err"); return; }
   event.target.disabled = true;
   try {
-    const account = await api("/login/sms/verify", { method: "POST", body: JSON.stringify({ phone, code }) });
+    const account = await api("/login/sms/verify", { method: "POST", body: JSON.stringify({ phone, code, state: state.loginState }) });
     toast("登录成功：" + account.alias, "ok");
     await loadAccounts();
   } catch (err) { /* shown */ } finally { event.target.disabled = false; }
@@ -457,6 +457,7 @@ document.getElementById("btn-login-token").addEventListener("click", async event
   if (!payload.authorization) { toast("缺少 authorization", "err"); return; }
   event.target.disabled = true;
   try {
+    payload.state = state.loginState;
     const account = await api("/login/token", { method: "POST", body: JSON.stringify(payload) });
     toast("已导入：" + account.alias, "ok");
     await loadAccounts();

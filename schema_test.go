@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"math/big"
 	"net/http"
@@ -378,5 +379,69 @@ func TestNewUpstreamHasBothClients(t *testing.T) {
 	}
 	if u.stream.Timeout != 0 {
 		t.Fatal("streaming client must not cap the whole request")
+	}
+}
+
+func TestLoginSessionCompletion(t *testing.T) {
+	a := &app{log: newLogRing(10)}
+	session := a.newLoginSession()
+	if session.State == "" {
+		t.Fatal("empty state")
+	}
+	account := &credential{ID: "x", Alias: "x"}
+	a.completeLoginSession(session.State, account)
+	if a.loginSessionByState(session.State).Auth != account {
+		t.Fatal("session was not completed")
+	}
+	// Completed sessions are consumed by pollLogin; an unknown state is a no-op.
+	a.completeLoginSession("missing", account)
+}
+
+func TestResolvePointsAccountRejectsUnknownID(t *testing.T) {
+	a := &app{log: newLogRing(10)}
+	a.pool = newPool()
+	a.pool.put(&credential{ID: "known", Alias: "known", Authorization: "t", OrganizationCode: "o"})
+	if account, resp := a.resolvePointsAccount("known"); account == nil || resp != nil {
+		t.Fatal("known id rejected")
+	}
+	// An explicit but unknown id must be an error, not a silent other account.
+	if account, resp := a.resolvePointsAccount("ghost"); account != nil || resp == nil || resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown id fell back: account=%v resp=%v", account, resp)
+	}
+	// An empty id picks any usable account.
+	if account, resp := a.resolvePointsAccount(""); account == nil || resp != nil {
+		t.Fatal("empty id did not fall back")
+	}
+}
+
+func TestParseSseEventsAcrossLines(t *testing.T) {
+	// A single event split over two data lines must be emitted once, joined.
+	a := &app{log: newLogRing(10)}
+	var emitted [][]byte
+	original := hostCall
+	hostCall = func(method string, payload any) (json.RawMessage, error) {
+		if req, ok := payload.(streamEmitRequest); ok {
+			emitted = append(emitted, append([]byte(nil), req.Payload...))
+		}
+		return json.RawMessage(`{}`), nil
+	}
+	defer func() { hostCall = original }()
+
+	body := strings.NewReader("data: {\"choices\":[{\"delta\":{\"content\":\n" +
+		"data: \"hi\"},\"finish_reason\":\"stop\"}],\"model\":\"m\"}\n\n" +
+		"data: [DONE]\n\n")
+	stats := &streamStats{started: time.Now()}
+	if err := a.pumpStream(context.Background(), "s1", body, func() {}, stats); err != nil {
+		t.Fatalf("pumpStream: %v", err)
+	}
+	if len(emitted) != 1 {
+		t.Fatalf("expected one joined event, got %d: %q", len(emitted), emitted)
+	}
+	frame := string(emitted[0])
+	if !strings.Contains(frame, "\"hi\"") || !strings.Contains(frame, "finish_reason") {
+		t.Fatalf("joined frame lost data: %s", frame)
+	}
+	if stats.model != "" || stats.usage != nil {
+		t.Fatalf("unexpected stats: %+v", stats)
 	}
 }

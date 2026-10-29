@@ -24,9 +24,30 @@ func (a *app) newLoginSession() *loginSession {
 	if a.logins == nil {
 		a.logins = make(map[string]*loginSession)
 	}
+	now := time.Now()
+	for state, existing := range a.logins {
+		if now.After(existing.Expires) {
+			delete(a.logins, state)
+		}
+	}
 	a.logins[session.State] = session
 	a.loginMu.Unlock()
 	return session
+}
+
+// completeLoginSession hands a finished login to the host's poll call. The
+// console carries the state it was opened with, so a browser login can close a
+// CPA-initiated session instead of leaving it pending forever.
+func (a *app) completeLoginSession(state string, account *credential) {
+	if state == "" || account == nil {
+		return
+	}
+	a.loginMu.Lock()
+	session := a.logins[state]
+	if session != nil {
+		session.Auth = account
+	}
+	a.loginMu.Unlock()
 }
 
 func (a *app) loginSessionByState(state string) *loginSession {
@@ -69,6 +90,9 @@ func (a *app) pollLogin(raw []byte) ([]byte, error) {
 		return okEnvelope(authLoginPollResponse{Status: "error", Message: "登录会话不存在或已过期，请在控制台重新发起"})
 	}
 	if session.Auth != nil {
+		a.loginMu.Lock()
+		delete(a.logins, req.State)
+		a.loginMu.Unlock()
 		return okEnvelope(authLoginPollResponse{
 			Status:  "success",
 			Message: "登录成功",
@@ -292,13 +316,13 @@ func (a *app) adoptLogin(ctx context.Context, authorization, alias, phone string
 	a.refreshAccountInfo(account)
 	// The login gift is the client's own reward hook; trigger it immediately.
 	if a.currentConfig().DailyPointsEnabled {
-		go func() {
+		a.spawn("points", func() {
 			giftCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			if gift, err := a.claimLoginGift(giftCtx, account); err == nil && gift.Granted {
 				a.log.info("points", fmt.Sprintf("账号 %s 登录奖励到账 %s", account.label(), formatPoints(gift.PointAmount.Float64())))
 			}
-		}()
+		})
 	}
 	return account, nil
 }

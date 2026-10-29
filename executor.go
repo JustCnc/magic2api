@@ -5,11 +5,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -32,7 +32,11 @@ func (a *app) execute(raw []byte) ([]byte, error) {
 		return upstreamError("请求体无效："+errBody.Error(), http.StatusBadRequest, false), nil
 	}
 	start := time.Now()
-	result, account, f := a.dispatch(context.Background(), cfg, body, false, preferredAccountID(req.executorRequest))
+	// One budget for all attempts: the host cannot cancel this call, so an
+	// upstream that hangs must not hold a host goroutine for max_attempts × timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.RequestTimeoutSeconds)*time.Second)
+	defer cancel()
+	result, account, f := a.dispatch(ctx, cfg, body, false, preferredAccountID(req.executorRequest))
 	if f != nil {
 		a.metrics.record(false)
 		a.log.error("chat", fmt.Sprintf("model=%s HTTP=%d %s", upstreamModel, f.Status, f.Message))
@@ -64,7 +68,7 @@ func (a *app) execute(raw []byte) ([]byte, error) {
 		a.log.debugDump("chat", "response: "+truncateText(string(result.body), 800))
 	}
 	if cfg.PointsLogging && account != nil {
-		go a.attachRequestPoints(seq, account, upstreamModel, start, time.Now())
+		a.enqueuePoints(pointsJob{seq: seq, account: account, model: upstreamModel, started: start, finished: time.Now()})
 	}
 	return okEnvelope(executorResponse{
 		Payload: result.body,
@@ -95,8 +99,13 @@ func (a *app) executeStream(raw []byte) ([]byte, error) {
 		return upstreamError("请求体无效："+errBody.Error(), http.StatusBadRequest, false), nil
 	}
 	start := time.Now()
-	resp, account, f := a.openStream(context.Background(), cfg, body, preferredAccountID(req.executorRequest))
+	// One cancellable context owns the whole stream: the idle watchdog cancels it
+	// to close the upstream body, and the pump cancels it on the way out. It must
+	// not be cancelled here — this function returns before the stream is done.
+	streamCtx, streamCancel := context.WithCancel(context.Background())
+	resp, account, f := a.openStream(streamCtx, cfg, body, preferredAccountID(req.executorRequest))
 	if f != nil {
+		streamCancel()
 		a.metrics.record(false)
 		a.log.error("stream", fmt.Sprintf("model=%s HTTP=%d %s", upstreamModel, f.Status, f.Message))
 		return upstreamError(f.Message, f.Status, f.Retryable), nil
@@ -115,6 +124,8 @@ func (a *app) executeStream(raw []byte) ([]byte, error) {
 
 	if !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 		// A stream request answered with a plain completion: replay it as chunks.
+		// The replay does not use the stream context, so release it here.
+		streamCancel()
 		payload, errRead := readAllLimited(resp.Body, 64<<20)
 		resp.Body.Close()
 		if errRead != nil {
@@ -127,7 +138,7 @@ func (a *app) executeStream(raw []byte) ([]byte, error) {
 			return upstreamError("上游返回了无法解析的响应体："+truncateText(string(payload), 300), http.StatusBadGateway, true), nil
 		}
 		usage := parseUsage(payload)
-		go func() {
+		a.spawn("stream", func() {
 			for _, chunk := range chunks {
 				if errEmit := a.emit(streamID, chunk); errEmit != nil {
 					a.closeStream(streamID, errEmit.Error())
@@ -142,22 +153,23 @@ func (a *app) executeStream(raw []byte) ([]byte, error) {
 			a.metrics.record(true)
 			a.metrics.streamed.Add(1)
 			if cfg.PointsLogging && account != nil {
-				go a.attachRequestPoints(seq, account, upstreamModel, start, time.Now())
+				a.enqueuePoints(pointsJob{seq: seq, account: account, model: upstreamModel, started: start, finished: time.Now()})
 			}
 			a.closeStream(streamID, "")
-		}()
+		})
 		return okEnvelope(map[string]any{"headers": http.Header{"Content-Type": []string{"text/event-stream"}}})
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	idle := time.AfterFunc(time.Duration(cfg.RequestTimeoutSeconds)*time.Second, cancel)
-	go func() {
-		defer cancel()
+	idle := time.AfterFunc(time.Duration(cfg.RequestTimeoutSeconds)*time.Second, streamCancel)
+	a.spawn("stream", func() {
+		defer streamCancel()
 		defer idle.Stop()
 		defer resp.Body.Close()
 		a.metrics.streamed.Add(1)
-		stats := &streamStats{started: start}
-		errPump := a.pumpStream(ctx, streamID, resp.Body, func() { idle.Reset(time.Duration(cfg.RequestTimeoutSeconds) * time.Second) }, stats)
+		stats := &streamStats{started: start, model: upstreamModel}
+		errPump := a.pumpStream(streamCtx, streamID, resp.Body, func() {
+			idle.Reset(time.Duration(cfg.RequestTimeoutSeconds) * time.Second)
+		}, stats)
 		elapsed := time.Since(start).Milliseconds()
 		entry.TotalMs = elapsed
 		entry.TTFTms = stats.ttftMs
@@ -166,15 +178,26 @@ func (a *app) executeStream(raw []byte) ([]byte, error) {
 			fail := asFailure(errPump)
 			entry.Status = fail.Status
 			entry.Error = fail.Message
-			if isClientGone(errPump) {
-				// The downstream client hung up: not an upstream failure.
+			switch {
+			case errors.Is(errPump, errClientGone):
+				// The downstream client hung up: the account is healthy.
 				entry.Status = 499
 				entry.Error = "客户端中断"
+			case errors.Is(errPump, errStreamIdle):
+				entry.Status = http.StatusGatewayTimeout
+				entry.Error = "上游流空闲超时"
+				if account != nil {
+					a.accounts.markFailure(account, &failure{Status: http.StatusGatewayTimeout, Message: entry.Error, Retryable: true})
+				}
+			default:
+				if account != nil {
+					a.accounts.markFailure(account, fail)
+				}
 			}
 			a.requests.add(entry)
 			a.metrics.record(false)
-			a.log.error("stream", fmt.Sprintf("model=%s %dms %s", upstreamModel, elapsed, fail.Message))
-			a.closeStream(streamID, fail.Message)
+			a.log.error("stream", fmt.Sprintf("model=%s %dms %s", upstreamModel, elapsed, entry.Error))
+			a.closeStream(streamID, entry.Error)
 			return
 		}
 		seq := a.requests.add(entry)
@@ -185,10 +208,10 @@ func (a *app) executeStream(raw []byte) ([]byte, error) {
 		}
 		a.log.info("stream", fmt.Sprintf("model=%s %dms", upstreamModel, elapsed))
 		if cfg.PointsLogging && account != nil {
-			go a.attachRequestPoints(seq, account, upstreamModel, start, time.Now())
+			a.enqueuePoints(pointsJob{seq: seq, account: account, model: upstreamModel, started: start, finished: time.Now()})
 		}
 		a.closeStream(streamID, "")
-	}()
+	})
 	return okEnvelope(map[string]any{"headers": http.Header{"Content-Type": []string{"text/event-stream"}}})
 }
 
@@ -220,13 +243,6 @@ func (a *app) dispatch(ctx context.Context, cfg Config, body []byte, stream bool
 		apiKey, errKey := a.accounts.ensureAPIKey(ctx, account)
 		if errKey != nil {
 			f := asFailure(errKey)
-			if f.Auth {
-				// A rejected JWT cannot be repaired by retrying this account.
-				account.mu.Lock()
-				account.Dead = false
-				account.cooldownUntil = time.Now().Add(time.Duration(cfg.CooldownSeconds) * time.Second)
-				account.mu.Unlock()
-			}
 			a.accounts.markFailure(account, f)
 			lastFailure = f
 			continue
@@ -408,54 +424,91 @@ func (a *app) pumpStream(ctx context.Context, streamID string, body io.Reader, t
 	scanner.Buffer(make([]byte, 0, 64*1024), 8<<20)
 	sawFinish := false
 	sawToolCall := false
-	for scanner.Scan() {
-		touch()
-		line := bytes.TrimRight(scanner.Bytes(), "\r")
-		if len(line) == 0 || !bytes.HasPrefix(line, []byte("data:")) {
-			continue
+	var event [][]byte
+	flush := func() error {
+		if len(event) == 0 {
+			return nil
 		}
-		value := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+		value := bytes.Join(event, []byte("\n"))
+		event = event[:0]
 		if len(value) == 0 {
-			continue
+			return nil
 		}
 		if bytes.Equal(value, []byte("[DONE]")) {
-			if !sawFinish {
-				a.emitFinish(streamID, stats, sawToolCall, "")
-			}
-			return nil
+			return io.EOF
 		}
 		if usage := parseUsage(value); usage != nil && usage.PromptTokens+usage.CompletionTokens > 0 {
 			stats.usage = usage
 		}
-		if bytes.Contains(value, []byte(`"finish_reason":"`)) && !bytes.Contains(value, []byte(`"finish_reason":null`)) {
+		if finishReasonOf(value) != "" {
 			sawFinish = true
 		}
-		if bytes.Contains(value, []byte(`"tool_calls"`)) {
+		if bytes.Contains(value, []byte("tool_calls")) {
 			sawToolCall = true
 		}
-		if stats.ttftMs == 0 && (bytes.Contains(value, []byte(`"content":"`)) || bytes.Contains(value, []byte(`"reasoning_content":"`))) {
+		if stats.ttftMs == 0 && (bytes.Contains(value, []byte("content")) || bytes.Contains(value, []byte("reasoning_content"))) {
 			stats.ttftMs = time.Since(stats.started).Milliseconds()
-		}
-		chunk := append([]byte(nil), value...)
-		if err := a.emit(streamID, chunk); err != nil {
-			return err
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return errStreamIdle
 		default:
 		}
+		chunk := append([]byte(nil), value...)
+		if err := a.emit(streamID, chunk); err != nil {
+			return fmt.Errorf("%w: %v", errClientGone, err)
+		}
+		return nil
+	}
+	for scanner.Scan() {
+		touch()
+		line := bytes.TrimRight(scanner.Bytes(), "\r")
+		if len(line) == 0 {
+			if err := flush(); err != nil {
+				if errors.Is(err, io.EOF) {
+					if !sawFinish {
+						a.emitFinish(streamID, stats, sawToolCall, "")
+					}
+					return nil
+				}
+				return err
+			}
+			continue
+		}
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		value := bytes.TrimPrefix(line, []byte("data:"))
+		value = bytes.TrimPrefix(value, []byte(" "))
+		event = append(event, append([]byte(nil), value...))
 	}
 	if err := scanner.Err(); err != nil {
 		if !sawFinish {
 			a.emitFinish(streamID, stats, sawToolCall, "上游流中断："+err.Error())
 		}
+		return fmt.Errorf("上游流中断：%w", err)
+	}
+	if err := flush(); err != nil && !errors.Is(err, io.EOF) {
 		return err
 	}
 	if !sawFinish {
 		a.emitFinish(streamID, stats, sawToolCall, "")
 	}
 	return nil
+}
+
+// finishReasonOf returns the finish_reason of the first choice, tolerating
+// whitespace in the frame.
+func finishReasonOf(payload []byte) string {
+	var probe struct {
+		Choices []struct {
+			FinishReason *string `json:"finish_reason"`
+		} `json:"choices"`
+	}
+	if json.Unmarshal(payload, &probe) != nil || len(probe.Choices) == 0 || probe.Choices[0].FinishReason == nil {
+		return ""
+	}
+	return *probe.Choices[0].FinishReason
 }
 
 // emitFinish synthesises the closing chunk when the upstream ended without a
@@ -487,11 +540,17 @@ func (a *app) emitFinish(streamID string, stats *streamStats, toolCall bool, err
 }
 
 func (a *app) emit(streamID string, payload []byte) error {
+	if a.closing.Load() {
+		return errPluginClosing
+	}
 	_, err := hostCall(methodHostStreamEmit, streamEmitRequest{StreamID: streamID, Payload: payload})
 	return err
 }
 
 func (a *app) closeStream(streamID, errMsg string) {
+	if a.closing.Load() {
+		return
+	}
 	_, _ = hostCall(methodHostStreamClose, streamCloseRequest{StreamID: streamID, Error: errMsg})
 }
 
@@ -551,13 +610,18 @@ func completionToChunks(payload []byte) [][]byte {
 	return chunks
 }
 
-// isClientGone reports whether a stream error came from the downstream side.
-func isClientGone(err error) bool {
-	if err == nil {
-		return false
+var (
+	errClientGone    = errors.New("client gone")
+	errPluginClosing = errors.New("plugin is closing")
+	errStreamIdle    = errors.New("upstream stream idle")
+)
+
+// guard turns a panic inside a background goroutine into a log entry instead of
+// taking the host process down with it.
+func guard(a *app, scope string) {
+	if r := recover(); r != nil {
+		a.log.error(scope, fmt.Sprintf("后台任务 panic：%v", r))
 	}
-	message := err.Error()
-	return strings.Contains(message, "host callback") || strings.Contains(message, "context canceled") || strings.Contains(message, "EOF")
 }
 
 func readAllLimited(r io.Reader, limit int64) ([]byte, error) {
@@ -567,5 +631,3 @@ func readAllLimited(r io.Reader, limit int64) ([]byte, error) {
 	}
 	return buf.Bytes(), nil
 }
-
-var _ = sync.Mutex{}

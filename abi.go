@@ -92,6 +92,12 @@ func cliproxyPluginCall(method *C.char, request *C.uint8_t, requestLen C.size_t,
 	if request != nil && requestLen > 0 {
 		requestBytes = C.GoBytes(unsafe.Pointer(request), C.int(requestLen))
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			plugin.log.error("plugin", fmt.Sprintf("RPC panic in %s: %v", C.GoString(method), r))
+			writeResponse(response, errorEnvelope("panic", fmt.Sprintf("plugin panic: %v", r)))
+		}
+	}()
 	raw, errHandle := plugin.handleMethod(C.GoString(method), requestBytes)
 	if errHandle != nil {
 		writeResponse(response, errorEnvelope("plugin_error", errHandle.Error()))

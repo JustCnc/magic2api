@@ -50,18 +50,51 @@ type credential struct {
 }
 
 func (c *credential) apiKeyValid(margin time.Duration) bool {
-	if c.APIKey == "" {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.apiKeyValidLocked(margin)
+}
+
+// apiKeyValidLocked is the lock-free form for callers already holding c.mu.
+func (c *credential) apiKeyValidLocked(margin time.Duration) bool {
+	if c.APIKey == "" || c.APIKeyExpiresAt == 0 {
 		return false
 	}
-	exp := time.UnixMilli(c.APIKeyExpiresAt)
-	if c.APIKeyExpiresAt == 0 {
-		return false
-	}
-	return time.Now().Add(margin).Before(exp)
+	return time.Now().Add(margin).Before(time.UnixMilli(c.APIKeyExpiresAt))
 }
 
 func (c *credential) cooling() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return time.Now().Before(c.cooldownUntil)
+}
+
+// exportSnapshot copies the persisted fields under the lock so json.Marshal never
+// reads a string header while another goroutine rewrites it (which would be a
+// torn read inside the host process).
+func (c *credential) exportSnapshot() credential {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return credential{
+		ID:                    c.ID,
+		Alias:                 c.Alias,
+		Authorization:         c.Authorization,
+		OrganizationCode:      c.OrganizationCode,
+		Device:                c.Device,
+		APIKey:                c.APIKey,
+		RefreshToken:          c.RefreshToken,
+		APIKeyExpiresAt:       c.APIKeyExpiresAt,
+		RefreshTokenExpiresAt: c.RefreshTokenExpiresAt,
+		Priority:              c.Priority,
+		Disabled:              c.Disabled,
+		Dead:                  c.Dead,
+		Source:                c.Source,
+		Note:                  c.Note,
+		Nickname:              c.Nickname,
+		Phone:                 c.Phone,
+		UserID:                c.UserID,
+		UpdatedAt:             c.UpdatedAt,
+	}
 }
 
 func (c *credential) label() string {
@@ -264,7 +297,9 @@ func (p *pool) choose(preferred string, tried map[string]bool) *credential {
 	candidates := p.snapshot()
 	if preferred != "" {
 		for _, c := range candidates {
-			if c.ID == preferred && usable(c) && !tried[c.ID] {
+			// A cooling account must not win on stickiness alone: it would burn a
+			// whole attempt on a request that is expected to fail.
+			if c.ID == preferred && usable(c) && !c.cooling() && !tried[c.ID] {
 				return c
 			}
 		}
@@ -285,20 +320,41 @@ func (p *pool) choose(preferred string, tried map[string]bool) *credential {
 			}
 			continue
 		}
-		if c.Priority != best.Priority {
-			if c.Priority > best.Priority {
+		c.mu.Lock()
+		priority, updated, lastSuccess := c.Priority, c.UpdatedAt, c.lastSuccess
+		c.mu.Unlock()
+		best.mu.Lock()
+		bestPriority, bestUpdated, bestSuccess := best.Priority, best.UpdatedAt, best.lastSuccess
+		best.mu.Unlock()
+		if priority != bestPriority {
+			if priority > bestPriority {
 				best = c
 			}
 			continue
 		}
-		if c.lastSuccess.After(best.lastSuccess) {
+		if lastSuccess.After(bestSuccess) {
+			best = c
+			continue
+		}
+		if lastSuccess.Equal(bestSuccess) && updated > bestUpdated {
 			best = c
 		}
 	}
 	return best
 }
 
+// usable reports whether an account may serve traffic.
 func usable(c *credential) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.Dead && !c.Disabled && c.Authorization != "" && c.OrganizationCode != ""
+}
+
+// usableLocked is the lock-free form for callers already holding c.mu.
+func usableLocked(c *credential) bool {
 	return c != nil && !c.Dead && !c.Disabled && c.Authorization != "" && c.OrganizationCode != ""
 }
 
@@ -329,12 +385,18 @@ func (m *accountManager) ensureAPIKey(ctx context.Context, c *credential) (strin
 		select {
 		case <-ch:
 		case <-ctx.Done():
-			return "", ctx.Err()
+			// A cancelled caller is not a rejected credential: do not cool down.
+			return "", &failure{Status: 499, Message: "请求已取消"}
 		}
 		if c.apiKeyValid(time.Minute) {
 			return c.APIKey, nil
 		}
-		return "", &failure{Status: http.StatusUnauthorized, Message: "令牌刷新失败", Auth: true}
+		// The in-flight refresh failed. That is not proof the credential is bad,
+		// so leave the account health alone.
+		c.mu.Lock()
+		lastErr := c.lastError
+		c.mu.Unlock()
+		return "", &failure{Status: http.StatusBadGateway, Message: firstNonEmpty(lastErr, "令牌刷新失败"), Retryable: true}
 	}
 	ch := make(chan struct{})
 	m.flight[c.ID] = ch
@@ -346,7 +408,6 @@ func (m *accountManager) ensureAPIKey(ctx context.Context, c *credential) (strin
 		close(ch)
 	}()
 
-	cfg := m.app.currentConfig()
 	up := m.app.upstream()
 
 	// Prefer a refresh: it keeps the same refresh chain and costs one call.
@@ -368,7 +429,6 @@ func (m *accountManager) ensureAPIKey(ctx context.Context, c *credential) (strin
 	}
 	m.applyToken(c, tok)
 	m.app.log.info("token", fmt.Sprintf("账号 %s 铸造模型网关令牌成功", c.label()))
-	_ = cfg
 	return c.APIKey, nil
 }
 
@@ -467,6 +527,19 @@ func (a *app) loadPool() {
 	a.scanAccountsDir(cfg)
 }
 
+// deviceTaken reports whether another account already uses this device id.
+func (a *app) deviceTaken(deviceID, selfID string) bool {
+	if deviceID == "" {
+		return false
+	}
+	for _, other := range a.pool.snapshot() {
+		if other.ID != selfID && other.Device.ID == deviceID {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *app) persistAccounts() {
 	store := a.stateStore()
 	if store == nil {
@@ -531,6 +604,9 @@ func (a *app) scanAccountsDir(cfg Config) {
 		if c.Source == "accounts-dir" && !seen[c.ID] {
 			a.pool.remove(c.ID)
 			a.log.info("accounts", "账号文件已删除，移出池子："+c.label())
+			// Without this the account comes back on the next start, then gets
+			// removed again on the following scan.
+			a.persistAccounts()
 		}
 	}
 }

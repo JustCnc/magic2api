@@ -180,6 +180,10 @@ CGO_ENABLED=0 go test ./...
 - **每日积分只在「个人组织」有意义**：上游 `login-gift` 对个人组织生效；团队组织返回未领取属正常。
 - **账号健康度不落盘**：冷却、失败次数在进程内，重启清零；`dead`/`disabled`/优先级会落盘。
 - **未实现 Responses / Anthropic 格式**：插件只声明 `chat-completions` 输入输出。
+- **控制台需要 CPA 的管理密钥**：`/v0/management/*` 由宿主鉴权（`X-Management-Key`），
+  浏览器直接打开会 401；正常入口是 CPA 控制台里的 **Magic2API** 菜单（GUI 自带鉴权）。
+- **积分回填不占请求链路**：回填走单 worker + 有界队列（256），队列满时丢弃并记一条 warn，
+  不影响对话本身。
 
 ## 许可
 

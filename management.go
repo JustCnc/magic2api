@@ -74,6 +74,9 @@ func (a *app) handleManagement(req managementRequest) managementResponse {
 	if idx := strings.Index(path, "/"+providerKey+"/"); idx >= 0 {
 		path = path[idx+len(providerKey)+2:]
 	}
+	if idx := strings.IndexByte(path, '?'); idx >= 0 {
+		path = path[:idx]
+	}
 	path = "/" + strings.TrimPrefix(path, "/")
 	method := strings.ToUpper(strings.TrimSpace(req.Method))
 
@@ -212,7 +215,7 @@ func (a *app) listAccounts() []accountView {
 			DeviceName:       c.Device.Name,
 			DeviceID:         c.Device.ID,
 			OS:               strings.TrimSpace(c.Device.OS + " " + c.Device.OSVersion),
-			APIKeyValid:      c.apiKeyValid(0),
+			APIKeyValid:      c.apiKeyValidLocked(0),
 			APIKeyExpiresAt:  c.APIKeyExpiresAt,
 			RefreshExpiresAt: c.RefreshTokenExpiresAt,
 			LastSuccess:      c.lastSuccess.UnixMilli(),
@@ -388,9 +391,9 @@ func (a *app) managementAddAccount(req managementRequest) managementResponse {
 		account.OrganizationCode = org
 	}
 	account.bucket = newTokenBucket(a.currentConfig().RPM, a.currentConfig().Burst)
-	// A duplicate device id across accounts is replaced; a device that came with
-	// the token (already bound to a session) is kept as-is.
-	if in.Device.ID == "" {
+	// A device that came with the token may already be bound to a session, so it
+	// is kept; otherwise a device id shared with another account is replaced.
+	if in.Device.ID == "" || a.deviceTaken(account.Device.ID, account.ID) {
 		account.Device = newDevice("import:" + alias + ":" + randomHex(4))
 	}
 	a.pool.put(account)
@@ -499,13 +502,31 @@ func requestAccountID(req managementRequest) string {
 
 // ---- points ----
 
-func (a *app) managementPoints(req managementRequest) managementResponse {
-	account := a.pool.get(strings.TrimSpace(req.Query.Get("id")))
-	if account == nil {
-		account = a.pool.choose("", nil)
+// resolvePointsAccount picks the requested account, or any usable one when the
+// request carries no id. An unknown id is an error: falling back silently would
+// show (and claim) another account's points.
+func (a *app) resolvePointsAccount(id string) (*credential, *managementResponse) {
+	id = strings.TrimSpace(id)
+	if id != "" {
+		account := a.pool.get(id)
+		if account == nil {
+			resp := failResponse(http.StatusNotFound, "账号不存在："+id)
+			return nil, &resp
+		}
+		return account, nil
 	}
+	account := a.pool.choose("", nil)
 	if account == nil {
-		return failResponse(http.StatusNotFound, "账号池为空")
+		resp := failResponse(http.StatusNotFound, "账号池为空")
+		return nil, &resp
+	}
+	return account, nil
+}
+
+func (a *app) managementPoints(req managementRequest) managementResponse {
+	account, resp := a.resolvePointsAccount(req.Query.Get("id"))
+	if resp != nil {
+		return *resp
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -517,13 +538,9 @@ func (a *app) managementPoints(req managementRequest) managementResponse {
 }
 
 func (a *app) managementClaimGift(req managementRequest) managementResponse {
-	id := requestAccountID(req)
-	account := a.pool.get(id)
-	if account == nil {
-		account = a.pool.choose("", nil)
-	}
-	if account == nil {
-		return failResponse(http.StatusNotFound, "账号池为空")
+	account, resp := a.resolvePointsAccount(requestAccountID(req))
+	if resp != nil {
+		return *resp
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -543,12 +560,9 @@ func (a *app) managementClaimTask(req managementRequest) managementResponse {
 	if err := json.Unmarshal(req.Body, &body); err != nil {
 		return failResponse(http.StatusBadRequest, "请求体不是 JSON："+err.Error())
 	}
-	account := a.pool.get(strings.TrimSpace(body.ID))
-	if account == nil {
-		account = a.pool.choose("", nil)
-	}
-	if account == nil {
-		return failResponse(http.StatusNotFound, "账号池为空")
+	account, resp := a.resolvePointsAccount(body.ID)
+	if resp != nil {
+		return *resp
 	}
 	if strings.TrimSpace(body.Code) == "" {
 		return failResponse(http.StatusBadRequest, "缺少任务 code")
@@ -571,6 +585,7 @@ func (a *app) managementLoginPassword(req managementRequest) managementResponse 
 		Password  string `json:"password"`
 		StateCode string `json:"state_code"`
 		Alias     string `json:"alias"`
+		State     string `json:"state"`
 	}
 	if err := json.Unmarshal(req.Body, &body); err != nil {
 		return failResponse(http.StatusBadRequest, "请求体不是 JSON："+err.Error())
@@ -598,6 +613,7 @@ func (a *app) managementLoginPassword(req managementRequest) managementResponse 
 	if err != nil {
 		return failResponse(http.StatusBadGateway, asFailure(err).Message)
 	}
+	a.completeLoginSession(strings.TrimSpace(body.State), account)
 	return okResponse(a.accountView(account))
 }
 
@@ -652,6 +668,7 @@ func (a *app) managementLoginSMSVerify(req managementRequest) managementResponse
 		StateCode string `json:"state_code"`
 		Code      string `json:"code"`
 		Alias     string `json:"alias"`
+		State     string `json:"state"`
 	}
 	if err := json.Unmarshal(req.Body, &body); err != nil {
 		return failResponse(http.StatusBadRequest, "请求体不是 JSON："+err.Error())
@@ -680,6 +697,7 @@ func (a *app) managementLoginSMSVerify(req managementRequest) managementResponse
 	if err != nil {
 		return failResponse(http.StatusBadGateway, asFailure(err).Message)
 	}
+	a.completeLoginSession(strings.TrimSpace(body.State), account)
 	return okResponse(a.accountView(account))
 }
 
@@ -688,6 +706,7 @@ func (a *app) managementLoginToken(req managementRequest) managementResponse {
 		Authorization    string `json:"authorization"`
 		OrganizationCode string `json:"organization_code"`
 		Alias            string `json:"alias"`
+		State            string `json:"state"`
 	}
 	if err := json.Unmarshal(req.Body, &body); err != nil {
 		return failResponse(http.StatusBadRequest, "请求体不是 JSON："+err.Error())
@@ -730,6 +749,7 @@ func (a *app) managementLoginToken(req managementRequest) managementResponse {
 	if _, err := a.accounts.ensureAPIKey(ctx, account); err != nil {
 		a.log.warn("accounts", fmt.Sprintf("账号 %s 令牌铸造失败：%s", account.label(), asFailure(err).Message))
 	}
+	a.completeLoginSession(strings.TrimSpace(body.State), account)
 	return okResponse(a.accountView(account))
 }
 

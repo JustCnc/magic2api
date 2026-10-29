@@ -200,22 +200,68 @@ func (a *app) completeOnboardingTask(ctx context.Context, account *credential, c
 	return payload.Points.Float64(), nil
 }
 
+// pointsJob is one finished request waiting for its ledger row to appear.
+type pointsJob struct {
+	seq      int64
+	account  *credential
+	model    string
+	started  time.Time
+	finished time.Time
+}
+
+// enqueuePoints hands the request to the single backfill worker. A full queue
+// drops the entry instead of growing goroutines without bound.
+func (a *app) enqueuePoints(job pointsJob) {
+	a.mu.Lock()
+	queue := a.pointsQueue
+	a.mu.Unlock()
+	if queue == nil {
+		return
+	}
+	select {
+	case queue <- job:
+	default:
+		a.log.warn("points", "积分回填队列已满，丢弃本次回填")
+	}
+}
+
+// pointsWorker is the only goroutine that touches the ledger for backfill.
+func (a *app) pointsWorker(ctx context.Context) {
+	a.mu.Lock()
+	queue := a.pointsQueue
+	a.mu.Unlock()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job := <-queue:
+			a.attachRequestPoints(ctx, job)
+		}
+	}
+}
+
 // attachRequestPoints matches a finished request against the ledger and writes
 // the consumed points back into the request log.
-func (a *app) attachRequestPoints(seq int64, account *credential, model string, started, finished time.Time) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+func (a *app) attachRequestPoints(parent context.Context, job pointsJob) {
+	ctx, cancel := context.WithTimeout(parent, 60*time.Second)
 	defer cancel()
 	// The ledger row is written asynchronously; give it a moment and retry.
 	for attempt := 0; attempt < 4; attempt++ {
-		time.Sleep(time.Duration(attempt) * 2 * time.Second)
-		records, err := a.records(ctx, account, 3, "personal", 30)
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Duration(attempt) * 2 * time.Second):
+			}
+		}
+		records, err := a.records(ctx, job.account, 3, "personal", 30)
 		if err != nil {
 			continue
 		}
-		total, matched := a.claimModelRecords(account.ID, records, model, started, finished)
+		total, matched := a.claimModelRecords(job.account.ID, records, job.model, job.started, job.finished)
 		if matched {
 			if total != 0 {
-				a.requests.setPoints(seq, total)
+				a.requests.setPoints(job.seq, total)
 				a.metrics.points.Add(total)
 			}
 			return

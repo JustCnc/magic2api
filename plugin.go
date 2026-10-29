@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -19,6 +20,11 @@ type app struct {
 	stop    context.CancelFunc
 	done    chan struct{}
 	started bool
+	// closing stops background goroutines from calling back into a host that is
+	// already shutting the plugin down.
+	closing atomic.Bool
+	// bg tracks goroutines that may still touch the host.
+	bg sync.WaitGroup
 
 	pool     *pool
 	accounts *accountManager
@@ -40,6 +46,8 @@ type app struct {
 
 	pointsMu sync.Mutex
 	points   map[string]*pointsCache
+	// pointsQueue bounds the ledger backfill work: one worker, drop when full.
+	pointsQueue chan pointsJob
 
 	loginMu sync.Mutex
 	logins  map[string]*loginSession
@@ -80,14 +88,14 @@ func (a *app) configure(raw []byte) error {
 		return err
 	}
 	// The host reconfigures on every auth-directory change; skip the expensive
-	// work when nothing actually changed.
-	fingerprint := cfg.DataDir + "|" + cfg.BaseURL + "|" + cfg.AccountBaseURL + "|" + cfg.AccountsDir + "|" + cfg.Authorization + "|" + cfg.OrganizationCode + "|" + fmt.Sprint(cfg.RPM, cfg.Burst, cfg.ModelPrefix)
+	// work when nothing actually changed. The fingerprint covers every field so
+	// a proxy or limit edit is never silently ignored.
+	fingerprint := fmt.Sprintf("%+v", cfg)
 	a.mu.Lock()
-	if a.rawCfg == fingerprint {
+	if a.rawCfg == fingerprint && a.state != nil && a.up != nil {
 		a.mu.Unlock()
 		return nil
 	}
-	a.rawCfg = fingerprint
 	a.mu.Unlock()
 	a.mu.Lock()
 	previous := a.cfg
@@ -97,6 +105,9 @@ func (a *app) configure(raw []byte) error {
 	if a.accounts == nil {
 		a.accounts = newAccountManager(a)
 	}
+	if a.pointsQueue == nil {
+		a.pointsQueue = make(chan pointsJob, 256)
+	}
 	if a.state == nil || previous.DataDir != cfg.DataDir {
 		store, errStore := newStateStore(cfg.DataDir)
 		if errStore != nil {
@@ -105,6 +116,10 @@ func (a *app) configure(raw []byte) error {
 		}
 		a.state = store
 	}
+	// Only remember the config once every side effect succeeded, so a failed
+	// configure is retried instead of being treated as a no-op.
+	a.rawCfg = fingerprint
+	a.closing.Store(false)
 	a.mu.Unlock()
 	if previousUp != nil {
 		previousUp.close()
@@ -147,6 +162,19 @@ func (a *app) configure(raw []byte) error {
 	return nil
 }
 
+// spawn runs fn on a tracked goroutine that is skipped once the plugin closes.
+func (a *app) spawn(scope string, fn func()) {
+	if a.closing.Load() {
+		return
+	}
+	a.bg.Add(1)
+	go func() {
+		defer a.bg.Done()
+		defer guard(a, scope)
+		fn()
+	}()
+}
+
 func (a *app) startBackground() {
 	a.mu.Lock()
 	if a.started {
@@ -160,8 +188,9 @@ func (a *app) startBackground() {
 	done := a.done
 	a.mu.Unlock()
 
-	go a.maintenanceLoop(ctx)
-	go a.dailyPointsLoop(ctx)
+	a.spawn("maintenance", func() { a.maintenanceLoop(ctx) })
+	a.spawn("points", func() { a.dailyPointsLoop(ctx) })
+	a.spawn("points-queue", func() { a.pointsWorker(ctx) })
 	go func() {
 		<-ctx.Done()
 		close(done)
@@ -169,6 +198,7 @@ func (a *app) startBackground() {
 }
 
 func (a *app) shutdown() {
+	a.closing.Store(true)
 	a.mu.Lock()
 	cancel := a.stop
 	done := a.done
@@ -186,6 +216,17 @@ func (a *app) shutdown() {
 		case <-time.After(5 * time.Second):
 			a.log.warn("plugin", "后台任务未在 5 秒内退出，继续关闭")
 		}
+	}
+	// Give tracked goroutines a moment; they check closing before calling back.
+	waited := make(chan struct{})
+	go func() {
+		a.bg.Wait()
+		close(waited)
+	}()
+	select {
+	case <-waited:
+	case <-time.After(5 * time.Second):
+		a.log.warn("plugin", "后台任务未在 5 秒内退出，继续关闭")
 	}
 	if up != nil {
 		up.close()
@@ -239,6 +280,9 @@ func (a *app) refreshStaleAccounts(ctx context.Context) {
 }
 
 func (a *app) hostAuths() ([]hostAuthEntry, error) {
+	if a.closing.Load() {
+		return nil, errPluginClosing
+	}
 	raw, err := hostCall(methodHostAuthList, map[string]any{})
 	if err != nil {
 		return nil, err
@@ -382,7 +426,7 @@ func (a *app) handleMethod(method string, request []byte) ([]byte, error) {
 // publishAccount writes the account into a CPA auth record. The record body is
 // the same JSON the console exports, so a round trip is lossless.
 func (a *app) publishAccount(c *credential, force bool) {
-	if c == nil || c.Authorization == "" {
+	if c == nil || c.Authorization == "" || a.closing.Load() {
 		return
 	}
 	if !a.publishGate.allow() {
@@ -549,6 +593,7 @@ func (a *app) parseAuth(raw []byte) ([]byte, error) {
 		account.APIKeyExpiresAt = existing.APIKeyExpiresAt
 		account.RefreshTokenExpiresAt = existing.RefreshTokenExpiresAt
 		account.Device = existing.Device
+		account.bucket = existing.bucket
 	}
 	changed := true
 	if existing := a.pool.get(account.ID); existing != nil {
@@ -566,7 +611,12 @@ func (a *app) parseAuth(raw []byte) ([]byte, error) {
 	// No publishAccount here: the host is parsing this record right now, and a
 	// save would re-enter auth.parse in an endless loop.
 	if changed {
-		a.refreshAccountInfo(account)
+		// The profile call can take up to 20s; auth.parse must answer quickly
+		// because the host walks every record through it.
+		go func() {
+			defer guard(a, "auth")
+			a.refreshAccountInfo(account)
+		}()
 		a.log.info("auth", "解析到凭据："+account.label())
 	}
 	return okEnvelope(authParseResponse{Handled: true, Auth: a.authDataFor(account, firstNonEmpty(req.FileName, providerKey+"-"+account.ID+".json"))})
@@ -584,7 +634,11 @@ func (a *app) refreshAuth(raw []byte) ([]byte, error) {
 	account := a.pool.get(firstNonEmpty(in.Alias, strings.TrimPrefix(req.AuthID, providerKey+"-")))
 	if account == nil && in.Authorization != "" {
 		account = accountFromInput(in, firstNonEmpty(in.Alias, req.AuthID))
+		account.Source = "auth-file"
+		cfg := a.currentConfig()
+		account.bucket = newTokenBucket(cfg.RPM, cfg.Burst)
 		a.pool.put(account)
+		a.persistAccounts()
 	}
 	if account == nil {
 		return errorEnvelope("auth_error", "没有可刷新的登录态"), nil
