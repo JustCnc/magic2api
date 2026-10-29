@@ -258,7 +258,3 @@ CGO_ENABLED=0 go test ./...
   `management.secret-key`（保存在本机 localStorage）。没配置 secret-key 的 CPA 不会有这个提示。
 - **积分回填不占请求链路**：回填走单 worker + 有界队列（256），队列满时丢弃并记一条 warn，
   不影响对话本身。
-
-## 许可
-
-本仓库不含 LICENSE 文件；上游服务与客户端版权归广东灯塔引擎科技有限公司所有，本项目只做本机客户端协议的互通。
