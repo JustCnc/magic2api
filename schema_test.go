@@ -859,3 +859,27 @@ func TestPickOrganizationShapes(t *testing.T) {
 		}
 	}
 }
+
+func TestSumTodayRecordsSplitsIncomeAndExpense(t *testing.T) {
+	income := []pointsRecord{
+		{BusinessType: "login_gift", Amount: 200, CreatedAt: "2026-10-29 10:58:52"},
+		{BusinessType: "onboarding_reward", Amount: 50, CreatedAt: "2026-10-29 16:01:24"},
+		{BusinessType: "onboarding_reward", Amount: 100, CreatedAt: "2026-10-29 15:29:41"},
+		{BusinessType: "international_register_rewards", Amount: 1000, CreatedAt: "2026-10-29 15:27:23"},
+	}
+	expense := []pointsRecord{
+		{BusinessType: "magic_model_consume", Amount: -3, CreatedAt: "2026-10-29 16:02:00"},
+		{BusinessType: "super_magic_task_consume", Amount: -6, CreatedAt: "2026-10-29 15:29:50"},
+	}
+	gift, task, consumed, claimedAt := sumTodayRecords(income, expense)
+	if gift != 200 || task != 150 || consumed != -9 {
+		t.Fatalf("gift=%v task=%v consumed=%v", gift, task, consumed)
+	}
+	if claimedAt != "2026-10-29 10:58:52" {
+		t.Fatalf("claimedAt=%q", claimedAt)
+	}
+	// No login gift today: the console must show 未领取 rather than a zero claim.
+	if gift, _, _, claimedAt := sumTodayRecords(nil, expense); gift != 0 || claimedAt != "" {
+		t.Fatalf("empty income: gift=%v claimedAt=%q", gift, claimedAt)
+	}
+}

@@ -106,34 +106,77 @@ func (a *app) balance(ctx context.Context, account *credential, force bool) (poi
 
 // records lists the point ledger.
 func (a *app) records(ctx context.Context, account *credential, filterType int, filterRange string, pageSize int) ([]pointsRecord, error) {
+	list, _, err := a.recordsPage(ctx, account, "", filterType, 1, pageSize)
+	return list, err
+}
+
+// recordsPage is the raw ledger query: date "" means every day, filter_type 1 is
+// everything, 2 income only, 3 expenditure only.
+func (a *app) recordsPage(ctx context.Context, account *credential, date string, filterType int, page, pageSize int) ([]pointsRecord, int, error) {
 	if filterType == 0 {
 		filterType = 3 // Expenditure
-	}
-	if filterRange == "" {
-		filterRange = "personal"
 	}
 	if pageSize <= 0 {
 		pageSize = 50
 	}
+	if page <= 0 {
+		page = 1
+	}
 	body, _ := json.Marshal(map[string]any{
-		"date":         "",
+		"date":         date,
 		"filter_type":  filterType,
-		"filter_range": filterRange,
-		"page":         1,
+		"filter_range": "personal",
+		"page":         page,
 		"page_size":    pageSize,
 	})
 	data, err := a.upstream().callAsset(ctx, http.MethodPost, "/api/v1/quota/points/records/queries", account.Authorization, account.OrganizationCode, body)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	var payload struct {
 		Total flexInt        `json:"total"`
 		List  []pointsRecord `json:"list"`
 	}
 	if err := json.Unmarshal(data, &payload); err != nil {
-		return nil, fmt.Errorf("解析积分流水失败：%w", err)
+		return nil, 0, fmt.Errorf("解析积分流水失败：%w", err)
 	}
-	return payload.List, nil
+	return payload.List, int(payload.Total.Int64()), nil
+}
+
+// recordsForDay walks every page of one day for one filter type. A day of model
+// calls easily runs into the hundreds of rows, so the console cannot judge
+// "already claimed today" from page one alone.
+func (a *app) recordsForDay(ctx context.Context, account *credential, day string, filterType, maxPages int) ([]pointsRecord, error) {
+	const pageSize = 100
+	var out []pointsRecord
+	for page := 1; page <= maxPages; page++ {
+		list, total, err := a.recordsPage(ctx, account, day, filterType, page, pageSize)
+		if err != nil {
+			return out, err
+		}
+		out = append(out, list...)
+		if len(list) < pageSize || page*pageSize >= total {
+			break
+		}
+	}
+	return out, nil
+}
+
+// todayTotals sums today's ledger for the console. Income and expenditure are
+// queried separately: with filter_type 1 a 13-row income day hides under
+// hundreds of consumption rows, which made the console claim "未领取" for an
+// already claimed daily gift.
+func (a *app) todayTotals(ctx context.Context, account *credential, day string) (gift, task, consumed float64, claimedAt string, err error) {
+	income, errIncome := a.recordsForDay(ctx, account, day, 2, 3)
+	if errIncome != nil {
+		return 0, 0, 0, "", errIncome
+	}
+	expense, errExpense := a.recordsForDay(ctx, account, day, 3, 5)
+	gift, task, consumed, claimedAt = sumTodayRecords(income, expense)
+	if errExpense != nil {
+		return gift, task, 0, claimedAt, errExpense
+	}
+	return gift, task, consumed, claimedAt, nil
 }
 
 // claimLoginGift calls the real daily claim endpoint. granted=false with the
@@ -447,28 +490,24 @@ func (a *app) summarizePoints(ctx context.Context, account *credential, includeR
 	} else {
 		out.Tasks = tasks
 	}
+	today := time.Now().In(serverZone).Format("2006-01-02")
+	gift, task, consumed, claimedAt, errToday := a.todayTotals(ctx, account, today)
+	if errToday != nil {
+		a.log.warn("points", fmt.Sprintf("账号 %s 读取今日积分失败：%s", account.label(), asFailure(errToday).Message))
+	} else {
+		out.Today.GiftPoints = gift
+		out.Today.TaskPoints = task
+		out.Today.ConsumedPoints = consumed
+		if claimedAt != "" {
+			out.Today.LastClaimedDate = today
+		}
+	}
 	if includeRecords {
 		records, errRecords := a.records(ctx, account, 1, "personal", 50)
 		if errRecords != nil {
 			out.RecordsError = asFailure(errRecords).Message
 		} else {
 			out.Records = records
-			today := time.Now().In(serverZone).Format("2006-01-02")
-			for _, record := range records {
-				created, ok := parseServerTime(record.CreatedAt)
-				if !ok || created.In(serverZone).Format("2006-01-02") != today {
-					continue
-				}
-				switch record.BusinessType {
-				case "login_gift":
-					out.Today.GiftPoints += record.Amount.Float64()
-					out.Today.LastClaimedDate = today
-				case "onboarding_reward":
-					out.Today.TaskPoints += record.Amount.Float64()
-				case "magic_model_consume":
-					out.Today.ConsumedPoints += record.Amount.Float64()
-				}
-			}
 		}
 	}
 	return out
@@ -545,4 +584,24 @@ func expiringSummary(balance pointsBalance, now time.Time, horizon time.Duration
 		buckets = buckets[:4]
 	}
 	return soon, total, buckets
+}
+
+// sumTodayRecords turns today's income and expenditure rows into the numbers the
+// console shows. Kept pure so the classification stays testable.
+func sumTodayRecords(income, expense []pointsRecord) (gift, task, consumed float64, claimedAt string) {
+	for _, record := range income {
+		switch record.BusinessType {
+		case "login_gift":
+			gift += record.Amount.Float64()
+			if claimedAt == "" {
+				claimedAt = record.CreatedAt
+			}
+		case "onboarding_reward":
+			task += record.Amount.Float64()
+		}
+	}
+	for _, record := range expense {
+		consumed += record.Amount.Float64()
+	}
+	return gift, task, consumed, claimedAt
 }

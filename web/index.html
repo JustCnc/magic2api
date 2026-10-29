@@ -1099,6 +1099,7 @@ function renderPointsDetail(detail) {
   const pending = tasks.filter(t => t.status === "PENDING" && t.reward_status === "PENDING" && t.code !== "first_ai_work");
   const reward = pending.reduce((sum, t) => sum + Number(t.points || 0), 0);
   const expiring = expiringOf(balance);
+  const claimedToday = !!today.last_claimed_date;
 
   document.getElementById("points-detail").innerHTML = `
     <div class="card">
@@ -1107,7 +1108,7 @@ function renderPointsDetail(detail) {
         <span class="pill info">${esc(account.phone_display || account.phone || "未绑定")}</span>
         <span class="spacer"></span>
         <button class="act ghost sm" id="btn-points-reload">刷新</button>
-        <button class="act sm" id="btn-claim-gift">领每日登录</button>
+        <button class="act sm" id="btn-claim-gift" ${claimedToday ? "disabled" : ""} title="${claimedToday ? "今天已经领过了" : "领取今天的 200 积分登录奖励"}">${claimedToday ? "今日已领" : "领每日登录"}</button>
         <button class="act sm" id="btn-claim-tasks">一键领任务</button>
       </div>
       <div class="grid">
