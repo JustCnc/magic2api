@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -102,7 +103,92 @@ func (a *app) balance(ctx context.Context, account *credential, force bool) (poi
 	cache.err = ""
 	cache.at = time.Now()
 	a.noteExpiry(account.ID, balance, cache.at)
+	a.pointsDirty.Store(true)
 	return balance, nil
+}
+
+// pointsFile is the persisted form of the balance cache: enough to paint the
+// console and seed the expiring-points router on a cold start.
+type pointsFile struct {
+	Version  int                       `json:"version"`
+	Accounts map[string]pointsSnapshot `json:"accounts"`
+}
+
+type pointsSnapshot struct {
+	At      int64         `json:"at"`
+	RecAt   int64         `json:"rec_at,omitempty"`
+	OK      bool          `json:"ok"`
+	Balance pointsBalance `json:"balance"`
+}
+
+func (a *app) savePointsCache() {
+	store := a.stateStore()
+	if store == nil {
+		return
+	}
+	file := pointsFile{Version: 1, Accounts: make(map[string]pointsSnapshot)}
+	a.pointsMu.Lock()
+	caches := make(map[string]*pointsCache, len(a.points))
+	for id, cache := range a.points {
+		caches[id] = cache
+	}
+	a.pointsMu.Unlock()
+	for id, cache := range caches {
+		cache.mu.Lock()
+		if cache.ok {
+			file.Accounts[id] = pointsSnapshot{
+				At:      unixMilliOrZero(cache.at),
+				RecAt:   unixMilliOrZero(cache.recAt),
+				OK:      cache.ok,
+				Balance: cache.balance,
+			}
+		}
+		cache.mu.Unlock()
+	}
+	if len(file.Accounts) == 0 {
+		return
+	}
+	if err := store.writeJSON(pointsFileName, file); err != nil {
+		a.log.warn("state", "写入 points.json 失败："+err.Error())
+	}
+}
+
+// loadPointsCache seeds the balance cache from disk. The router scores are
+// recomputed with the current clock, so the expiring-points order is right from
+// the first request instead of after the first refresh sweep.
+func (a *app) loadPointsCache() {
+	store := a.stateStore()
+	if store == nil {
+		return
+	}
+	var file pointsFile
+	ok, err := store.readJSON(pointsFileName, &file)
+	if err != nil {
+		a.log.warn("state", "读取 points.json 失败："+err.Error())
+		return
+	}
+	if !ok {
+		return
+	}
+	now := time.Now()
+	restored := 0
+	for id, snap := range file.Accounts {
+		if !snap.OK {
+			continue
+		}
+		cache := a.pointsFor(id)
+		cache.mu.Lock()
+		cache.balance = snap.Balance
+		cache.ok = true
+		cache.at = timeFromUnixMilli(snap.At)
+		cache.recAt = timeFromUnixMilli(snap.RecAt)
+		cache.mu.Unlock()
+		a.noteExpiry(id, snap.Balance, now)
+		restored++
+	}
+	if restored > 0 {
+		a.log.info("state", fmt.Sprintf("已恢复 %d 个账号的积分缓存", restored))
+	}
 }
 
 // expiryScore says how close an account is to losing points and how many of them
@@ -436,11 +522,61 @@ func (a *app) attachRequestPoints(parent context.Context, job pointsJob) {
 	}
 }
 
-// claimedRecords guards against attributing one ledger row to two requests.
-var claimedRecords = struct {
-	mu  sync.Mutex
-	ids map[string]bool
-}{ids: make(map[string]bool)}
+// claimedSet guards against attributing one ledger row to two requests. It is
+// persisted so a restart does not re-count rows the console already shows.
+type claimedSet struct {
+	dirty atomic.Bool
+	mu    sync.Mutex
+	ids   map[string]bool
+}
+
+var claimedRecords = &claimedSet{ids: make(map[string]bool)}
+
+// takeDirty reports whether a ledger row was newly claimed since the last flush.
+func (c *claimedSet) takeDirty() bool { return c.dirty.Swap(false) }
+
+// claim marks a row as used and reports whether it was free.
+func (c *claimedSet) claim(key string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.ids[key] {
+		return false
+	}
+	c.ids[key] = true
+	if len(c.ids) > 20000 {
+		// Bound the map; forgetting old ids only risks a duplicate backfill on
+		// rows far outside any live request window.
+		c.ids = make(map[string]bool)
+	}
+	c.dirty.Store(true)
+	return true
+}
+
+// claimedRecordIDs returns a bounded slice of the claimed keys for persistence.
+func claimedRecordIDs(limit int) []string {
+	claimedRecords.mu.Lock()
+	defer claimedRecords.mu.Unlock()
+	out := make([]string, 0, len(claimedRecords.ids))
+	for key := range claimedRecords.ids {
+		out = append(out, key)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func restoreClaimedRecords(ids []string) {
+	if len(ids) == 0 {
+		return
+	}
+	claimedRecords.mu.Lock()
+	defer claimedRecords.mu.Unlock()
+	for _, id := range ids {
+		claimedRecords.ids[id] = true
+	}
+}
 
 // claimModelRecords sums the unclaimed magic_model_consume rows for one model
 // inside the request's time window.
@@ -450,8 +586,6 @@ func (a *app) claimModelRecords(accountID string, records []pointsRecord, model 
 	needle := "模型调用「" + model + "」"
 	var total int64
 	matched := false
-	claimedRecords.mu.Lock()
-	defer claimedRecords.mu.Unlock()
 	for _, record := range records {
 		if record.BusinessType != "magic_model_consume" {
 			continue
@@ -464,15 +598,11 @@ func (a *app) claimModelRecords(accountID string, records []pointsRecord, model 
 			continue
 		}
 		key := accountID + ":" + record.ID.String()
-		if claimedRecords.ids[key] {
+		if !claimedRecords.claim(key) {
 			continue
 		}
-		claimedRecords.ids[key] = true
 		total += int64(record.Amount.Float64())
 		matched = true
-	}
-	if len(claimedRecords.ids) > 20000 {
-		claimedRecords.ids = make(map[string]bool)
 	}
 	return total, matched
 }
@@ -573,6 +703,7 @@ func (a *app) invalidatePoints(accountID string) {
 	cache.recAt = time.Time{}
 	cache.mu.Unlock()
 	a.forgetExpiry(accountID)
+	a.pointsDirty.Store(true)
 }
 
 func formatPoints(value float64) string {

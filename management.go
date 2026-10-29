@@ -331,7 +331,8 @@ func (a *app) managementSaveSettings(req managementRequest) managementResponse {
 	if err := json.Unmarshal(req.Body, &patch); err != nil {
 		return failResponse(http.StatusBadRequest, "请求体不是 JSON："+err.Error())
 	}
-	cfg, err := applySettingsPatch(a.currentConfig(), patch)
+	previousCfg := a.currentConfig()
+	cfg, err := applySettingsPatch(previousCfg, patch)
 	if err != nil {
 		return failResponse(http.StatusBadRequest, err.Error())
 	}
@@ -339,6 +340,11 @@ func (a *app) managementSaveSettings(req managementRequest) managementResponse {
 	// and win over the config file on the next start.
 	a.saveSettings(patch)
 	a.applyRuntimeConfig(cfg)
+	// Turning the expiring-points router on should take effect now, not on the
+	// next 5-minute sweep.
+	if cfg.PreferExpiringPoints && !previousCfg.PreferExpiringPoints {
+		a.spawn("expiry", func() { a.refreshExpiryScores(context.Background()) })
+	}
 	a.log.info("settings", "配置已更新")
 	return okResponse(a.settingsView())
 }

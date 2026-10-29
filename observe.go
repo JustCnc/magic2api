@@ -16,6 +16,7 @@ type logEntry struct {
 }
 
 type logRing struct {
+	dirty   atomic.Bool
 	mu      sync.Mutex
 	entries []logEntry
 	max     int
@@ -29,9 +30,35 @@ func newLogRing(max int) *logRing {
 }
 
 func (l *logRing) add(level, scope, message string) {
+	l.dirty.Store(true)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.entries = append(l.entries, logEntry{At: time.Now().UnixMilli(), Level: level, Scope: scope, Message: message})
+	if len(l.entries) > l.max {
+		l.entries = append([]logEntry(nil), l.entries[len(l.entries)-l.max:]...)
+	}
+}
+
+// takeDirty reports whether entries were appended since the last flush.
+func (l *logRing) takeDirty() bool { return l.dirty.Swap(false) }
+
+// snapshot copies the ring oldest first for persistence.
+func (l *logRing) snapshot() []logEntry {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]logEntry, len(l.entries))
+	copy(out, l.entries)
+	return out
+}
+
+// restore replaces the ring with a persisted tail.
+func (l *logRing) restore(entries []logEntry) {
+	if len(entries) == 0 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.entries = append([]logEntry(nil), entries...)
 	if len(l.entries) > l.max {
 		l.entries = append([]logEntry(nil), l.entries[len(l.entries)-l.max:]...)
 	}
@@ -60,6 +87,7 @@ func (l *logRing) recent(limit int) []logEntry {
 }
 
 type metrics struct {
+	dirty      atomic.Bool
 	requests   atomic.Int64
 	success    atomic.Int64
 	failures   atomic.Int64
@@ -72,12 +100,49 @@ type metrics struct {
 }
 
 func (m *metrics) record(ok bool) {
+	m.dirty.Store(true)
 	m.requests.Add(1)
 	if ok {
 		m.success.Add(1)
 	} else {
 		m.failures.Add(1)
 	}
+}
+
+// takeDirty reports whether the counters moved since the last flush.
+func (m *metrics) takeDirty() bool { return m.dirty.Swap(false) }
+
+// values is the flat form persisted in runtime.json.
+func (m *metrics) values() map[string]int64 {
+	return map[string]int64{
+		"requests":     m.requests.Load(),
+		"success":      m.success.Load(),
+		"failures":     m.failures.Load(),
+		"streamed":     m.streamed.Load(),
+		"local_limits": m.localLimit.Load(),
+		"auth_retries": m.authRetry.Load(),
+		"tokens_in":    m.tokensIn.Load(),
+		"tokens_out":   m.tokensOut.Load(),
+		"points":       m.points.Load(),
+	}
+}
+
+// restore brings back the counters from a previous run.
+func (m *metrics) restore(values map[string]int64) {
+	set := func(counter *atomic.Int64, key string) {
+		if v, ok := values[key]; ok {
+			counter.Store(v)
+		}
+	}
+	set(&m.requests, "requests")
+	set(&m.success, "success")
+	set(&m.failures, "failures")
+	set(&m.streamed, "streamed")
+	set(&m.localLimit, "local_limits")
+	set(&m.authRetry, "auth_retries")
+	set(&m.tokensIn, "tokens_in")
+	set(&m.tokensOut, "tokens_out")
+	set(&m.points, "points")
 }
 
 func (m *metrics) snapshot() map[string]any {
@@ -113,6 +178,7 @@ type requestEntry struct {
 }
 
 type requestLog struct {
+	dirty   atomic.Bool
 	mu      sync.Mutex
 	entries []requestEntry
 	max     int
@@ -127,6 +193,7 @@ func newRequestLog(max int) *requestLog {
 }
 
 func (r *requestLog) add(entry requestEntry) int64 {
+	r.dirty.Store(true)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.seq++
@@ -138,7 +205,37 @@ func (r *requestLog) add(entry requestEntry) int64 {
 	return entry.Seq
 }
 
+// takeDirty reports whether rows changed since the last flush.
+func (r *requestLog) takeDirty() bool { return r.dirty.Swap(false) }
+
+// snapshot copies the entries oldest first for persistence.
+func (r *requestLog) snapshot() []requestEntry {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]requestEntry, len(r.entries))
+	copy(out, r.entries)
+	return out
+}
+
+// restore replaces the log with a persisted tail and keeps sequence numbers
+// increasing so a late points backfill still finds its row.
+func (r *requestLog) restore(entries []requestEntry) {
+	if len(entries) == 0 {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.entries = append([]requestEntry(nil), entries...)
+	if len(r.entries) > r.max {
+		r.entries = append([]requestEntry(nil), r.entries[len(r.entries)-r.max:]...)
+	}
+	if last := r.entries[len(r.entries)-1].Seq; last > r.seq {
+		r.seq = last
+	}
+}
+
 func (r *requestLog) setPoints(seq int64, points int64) {
+	r.dirty.Store(true)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for i := range r.entries {

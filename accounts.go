@@ -47,6 +47,17 @@ type credential struct {
 
 	UpdatedAt int64 `json:"updated_at,omitempty"`
 
+	// Health and rate-limit state, mirrored here so a restart resumes where it
+	// left off instead of treating every account as freshly healthy.
+	CooldownUntilMs int64   `json:"cooldown_until_ms,omitempty"`
+	LastSuccessMs   int64   `json:"last_success_ms,omitempty"`
+	Failures        int     `json:"failures,omitempty"`
+	LastError       string  `json:"last_error,omitempty"`
+	BucketTokens    float64 `json:"bucket_tokens,omitempty"`
+	BucketAtMs      int64   `json:"bucket_at_ms,omitempty"`
+	ReloginAtMs     int64   `json:"relogin_at_ms,omitempty"`
+	ReloginFails    int     `json:"relogin_fails,omitempty"`
+
 	// runtime only
 	mu sync.Mutex `json:"-"`
 	// claimMu serialises daily-points claims without blocking console reads.
@@ -84,15 +95,18 @@ func (c *credential) cooling() bool {
 // exportSnapshot copies the persisted fields under the lock so json.Marshal never
 // reads a string header while another goroutine rewrites it (which would be a
 // torn read inside the host process).
-func (c *credential) exportSnapshot() credential {
+func (c *credential) exportSnapshot() *credential {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return credential{
+	out := &credential{
 		ID:                    c.ID,
 		Alias:                 c.Alias,
 		Authorization:         c.Authorization,
 		OrganizationCode:      c.OrganizationCode,
 		Device:                c.Device,
+		JWTExpiresAt:          c.JWTExpiresAt,
+		Password:              c.Password,
+		AutoRelogin:           c.AutoRelogin,
 		APIKey:                c.APIKey,
 		RefreshToken:          c.RefreshToken,
 		APIKeyExpiresAt:       c.APIKeyExpiresAt,
@@ -106,6 +120,31 @@ func (c *credential) exportSnapshot() credential {
 		Phone:                 c.Phone,
 		UserID:                c.UserID,
 		UpdatedAt:             c.UpdatedAt,
+		CooldownUntilMs:       unixMilliOrZero(c.cooldownUntil),
+		LastSuccessMs:         unixMilliOrZero(c.lastSuccess),
+		Failures:              c.failures,
+		LastError:             c.lastError,
+		ReloginAtMs:           unixMilliOrZero(c.reloginAt),
+		ReloginFails:          c.reloginFails,
+	}
+	if tokens, at := c.bucket.snapshotState(); at > 0 {
+		out.BucketTokens, out.BucketAtMs = tokens, at
+	}
+	return out
+}
+
+// restoreRuntime seeds the in-memory health state from the persisted mirrors.
+// Called right after an account is loaded; a cooldown that has already elapsed
+// simply behaves as if it never existed.
+func (c *credential) restoreRuntime() {
+	c.cooldownUntil = timeFromUnixMilli(c.CooldownUntilMs)
+	c.lastSuccess = timeFromUnixMilli(c.LastSuccessMs)
+	c.failures = c.Failures
+	c.lastError = c.LastError
+	c.reloginAt = timeFromUnixMilli(c.ReloginAtMs)
+	c.reloginFails = c.ReloginFails
+	if c.BucketAtMs > 0 {
+		c.bucket.restoreState(c.BucketTokens, timeFromUnixMilli(c.BucketAtMs))
 	}
 }
 
@@ -227,6 +266,35 @@ func newTokenBucket(rpm, burst int) *tokenBucket {
 		tokens: float64(burst),
 		last:   time.Now(),
 	}
+}
+
+// snapshotState returns the remaining tokens and the refill clock so a restart
+// resumes mid-window instead of starting from a full burst.
+func (b *tokenBucket) snapshotState() (float64, int64) {
+	if b == nil {
+		return 0, 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.tokens, b.last.UnixMilli()
+}
+
+// restoreState resumes a persisted bucket. The elapsed time still counts as
+// refill, capped at burst, so a long downtime cannot bank extra capacity.
+func (b *tokenBucket) restoreState(tokens float64, last time.Time) {
+	if b == nil || last.IsZero() {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.tokens = tokens + time.Since(last).Seconds()*b.rate
+	if b.tokens > b.burst {
+		b.tokens = b.burst
+	}
+	if b.tokens < 0 {
+		b.tokens = 0
+	}
+	b.last = time.Now()
 }
 
 func (b *tokenBucket) allow() bool {
@@ -552,6 +620,7 @@ func (m *accountManager) markSuccess(c *credential) {
 	c.failures = 0
 	c.lastError = ""
 	c.mu.Unlock()
+	m.app.markDirty()
 }
 
 func (m *accountManager) markFailure(c *credential, f *failure) {
@@ -577,6 +646,9 @@ func (m *accountManager) markFailure(c *credential, f *failure) {
 		c.cooldownUntil = time.Now().Add(time.Duration(cfg.CooldownSeconds) * time.Second)
 	}
 	c.mu.Unlock()
+	// A cooldown that survives a restart stops a hot loop from hammering the
+	// same failing upstream right after a reload.
+	m.app.markDirty()
 }
 
 // ---- persistence ----
@@ -598,6 +670,7 @@ func (a *app) loadPool() {
 				continue
 			}
 			c.bucket = newTokenBucket(a.currentConfig().RPM, a.currentConfig().Burst)
+			c.restoreRuntime()
 			if c.Device.ID == "" {
 				c.Device = newDevice("import:" + c.Alias)
 			}
@@ -640,7 +713,13 @@ func (a *app) persistAccounts() {
 	}
 	a.saveMu.Lock()
 	defer a.saveMu.Unlock()
-	accounts := a.pool.snapshot()
+	// Snapshot under each credential lock so the health mirrors are consistent
+	// and json.Marshal never reads a string header mid-rewrite.
+	live := a.pool.snapshot()
+	accounts := make([]*credential, 0, len(live))
+	for _, c := range live {
+		accounts = append(accounts, c.exportSnapshot())
+	}
 	file := accountsFile{Version: 1, Accounts: accounts}
 	if err := store.writeJSON("accounts.json", file); err != nil {
 		a.log.warn("state", "写入 accounts.json 失败："+err.Error())
@@ -727,4 +806,12 @@ func unixMilliOrZero(t time.Time) int64 {
 		return 0
 	}
 	return t.UnixMilli()
+}
+
+// timeFromUnixMilli is the inverse of unixMilliOrZero: 0 means "never".
+func timeFromUnixMilli(ms int64) time.Time {
+	if ms <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms)
 }

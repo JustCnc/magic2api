@@ -1095,3 +1095,130 @@ func TestSaveSettingsSurvivesRestartAndResetDropsIt(t *testing.T) {
 		t.Fatalf("reset did not fall back: prefer=%v rpm=%d", afterReset.PreferExpiringPoints, afterReset.RPM)
 	}
 }
+
+func newPersistentTestApp(t *testing.T, dir string) *app {
+	t.Helper()
+	store, err := newStateStore(dir)
+	if err != nil {
+		t.Fatalf("state store: %v", err)
+	}
+	a := &app{
+		log:      newLogRing(50),
+		metrics:  &metrics{},
+		requests: newRequestLog(20),
+		points:   make(map[string]*pointsCache),
+		expiry:   make(map[string]expiryScore),
+		state:    store,
+	}
+	a.cfg = defaultConfig()
+	return a
+}
+
+func TestCredentialHealthSurvivesRestart(t *testing.T) {
+	now := time.Now()
+	c := &credential{ID: "acc", Authorization: "a", OrganizationCode: "o"}
+	c.bucket = newTokenBucket(30, 20)
+	c.failures = 2
+	c.lastError = "HTTP 429"
+	c.cooldownUntil = now.Add(45 * time.Second)
+	c.lastSuccess = now.Add(-time.Minute)
+	c.reloginFails = 1
+	c.reloginAt = now.Add(-2 * time.Hour)
+	if !c.bucket.allow() || !c.bucket.allow() {
+		t.Fatal("bucket should start full")
+	}
+
+	raw, err := json.Marshal(c.exportSnapshot())
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var reloaded credential
+	if err := json.Unmarshal(raw, &reloaded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	reloaded.bucket = newTokenBucket(30, 20)
+	reloaded.restoreRuntime()
+
+	if !reloaded.cooling() {
+		t.Fatal("cooldown was lost")
+	}
+	if reloaded.failures != 2 || reloaded.lastError != "HTTP 429" {
+		t.Fatalf("health lost: failures=%d err=%q", reloaded.failures, reloaded.lastError)
+	}
+	if reloaded.lastSuccess.IsZero() || reloaded.reloginFails != 1 || reloaded.reloginAt.IsZero() {
+		t.Fatal("success/relogin state lost")
+	}
+	// 18 of the 20 burst tokens were spent; the rest refill normally.
+	if tokens, _ := reloaded.bucket.snapshotState(); tokens < 18 || tokens > 20 {
+		t.Fatalf("bucket not resumed: %v", tokens)
+	}
+}
+
+func TestRuntimeStateSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	a := newPersistentTestApp(t, dir)
+	a.metrics.record(true)
+	a.metrics.tokensIn.Add(120)
+	a.requests.add(requestEntry{Account: "live", Model: "magic/glm-5.1", Status: 200})
+	a.log.info("chat", "hello")
+	claimedRecords.claim("live:42")
+	a.flushState()
+
+	b := newPersistentTestApp(t, dir)
+	b.loadRuntimeState()
+	if got := b.metrics.requests.Load(); got != 1 {
+		t.Fatalf("requests counter = %d, want 1", got)
+	}
+	if got := b.metrics.tokensIn.Load(); got != 120 {
+		t.Fatalf("tokens_in = %d, want 120", got)
+	}
+	if rows := b.requests.recent(5); len(rows) != 1 || rows[0].Account != "live" {
+		t.Fatalf("request log not restored: %+v", rows)
+	}
+	// The restore itself logs a line, so look for the persisted one, not the count.
+	restoredLog := false
+	for _, entry := range b.log.recent(5) {
+		if entry.Scope == "chat" && entry.Message == "hello" {
+			restoredLog = true
+		}
+	}
+	if !restoredLog {
+		t.Fatalf("log ring not restored: %+v", b.log.recent(5))
+	}
+	// The claimed row must not be attributed twice after a restart.
+	if claimedRecords.claim("live:42") {
+		t.Fatal("claimed ledger row was reusable after restart")
+	}
+	// Sequence numbers keep growing so a late backfill still matches.
+	if seq := b.requests.add(requestEntry{Account: "live"}); seq != 2 {
+		t.Fatalf("seq = %d, want 2", seq)
+	}
+}
+
+func TestPointsCacheSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	a := newPersistentTestApp(t, dir)
+	a.cfg.PreferExpiringPoints = true
+	cache := a.pointsFor("acc")
+	cache.mu.Lock()
+	cache.balance = balanceWithExpiring(expiryCase{420, time.Now().Add(6 * time.Hour)})
+	cache.ok = true
+	cache.at = time.Now()
+	cache.mu.Unlock()
+	a.savePointsCache()
+
+	b := newPersistentTestApp(t, dir)
+	b.cfg.PreferExpiringPoints = true
+	b.loadPointsCache()
+	balance, err := b.balance(context.Background(), &credential{ID: "acc"}, false)
+	if err != nil {
+		t.Fatalf("balance from cache: %v", err)
+	}
+	if balance.Expiring[0].RemainingPoints.Float64() != 420 {
+		t.Fatalf("balance not restored: %+v", balance)
+	}
+	// The router is warm immediately: no refresh sweep needed for the score.
+	if score := b.expiryOf("acc"); score.Soon != 420 || score.Earliest.IsZero() {
+		t.Fatalf("expiry score not seeded: %+v", score)
+	}
+}

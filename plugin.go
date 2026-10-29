@@ -26,6 +26,10 @@ type app struct {
 	// closing stops background goroutines from calling back into a host that is
 	// already shutting the plugin down.
 	closing atomic.Bool
+	// dirty flags account state (health, tokens) and the points cache for the
+	// periodic flush; the rings carry their own flags.
+	dirty       atomic.Bool
+	pointsDirty atomic.Bool
 	// bg tracks goroutines that may still touch the host.
 	bg sync.WaitGroup
 
@@ -143,6 +147,7 @@ func (a *app) configure(raw []byte) error {
 	a.pool.mu.Unlock()
 	if !loaded {
 		a.loadPool()
+		a.loadRuntimeState()
 	} else {
 		a.scanAccountsDir(cfg)
 	}
@@ -204,6 +209,7 @@ func (a *app) startBackground() {
 	a.spawn("maintenance", func() { a.maintenanceLoop(ctx) })
 	a.spawn("points", func() { a.dailyPointsLoop(ctx) })
 	a.spawn("expiry", func() { a.expiryLoop(ctx) })
+	a.spawn("persist", func() { a.persistLoop(ctx) })
 	a.spawn("points-queue", func() { a.pointsWorker(ctx) })
 	go func() {
 		<-ctx.Done()
@@ -245,6 +251,9 @@ func (a *app) shutdown() {
 	if up != nil {
 		up.close()
 	}
+	// Last flush so the console keeps its history and the accounts keep their
+	// cooldowns across the restart.
+	a.flushState()
 }
 
 func (a *app) maintenanceLoop(ctx context.Context) {

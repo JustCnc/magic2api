@@ -175,6 +175,25 @@
 | `proxy_url` | 空 | 出站 HTTP 代理 |
 | `debug_dump` | `false` | 日志里打印请求/响应片段 |
 
+### 状态文件（`data_dir`）
+
+能重建的东西也会落盘，重启后自动恢复，不会出现「刚启动什么都不记得」的空窗。
+
+| 文件 | 内容 | 写入时机 |
+| --- | --- | --- |
+| `accounts.json` | 账号全量：`authorization`、`organization_code`、`device`、`api_key` + `refresh_token` 及其有效期、`password`、`auto_relogin`、优先级、`dead`/`disabled`、备注；**健康态**：`cooldown_until_ms`、`last_success_ms`、`failures`、`last_error`、`bucket_tokens`/`bucket_at_ms`、`relogin_at_ms`/`relogin_fails` | 任何变动后立即写，其余每 30 秒 |
+| `points.json` | 每账号最近一次余额与 `expiring_quota_details` | 余额刷新后 30 秒内 |
+| `runtime.json` | 计数器（请求/成功/失败/token/积分）、请求日志、运行日志、已认领的流水分 id | 有变化时每 30 秒 + 关闭时 |
+| `models.json` | 模型目录缓存 | 目录刷新后 |
+| `settings.json` | 控制台保存的运行参数（优先于 config.yaml） | 控制台保存时 |
+
+重启后的恢复行为：
+
+- 冷却未到期的账号继续冷却，令牌桶从上次剩余量继续（不做「满血」重启，避免刚启动就把上游打爆）
+- `快过期` 排序分数用 `points.json` 的余额立即重算，**不用等首次刷新**
+- 请求日志、运行日志、计数器、已认领流水全部接上，控制台看到的是连续的历史
+- 自动重登的防抖时间与失败计数同样保留
+
 ## 构建
 
 ```bash
@@ -232,7 +251,7 @@ CGO_ENABLED=0 go test ./...
 - **积分回填是按「模型 + 时间窗」认领**：流水里没有 request id，无法一对一绑定；同一模型高频并发时可能
   出现个别请求认领不到（记 0）或相邻请求互相认领（总额仍正确）。
 - **每日积分只在「个人组织」有意义**：上游 `login-gift` 对个人组织生效；团队组织返回未领取属正常。
-- **落盘与不落盘**：`accounts.json`（账号、令牌、密码、优先级、`dead`/`disabled`）、`models.json`、`settings.json`（控制台保存的运行参数）重启不丢；冷却、失败次数、令牌桶、积分缓存、请求与运行日志、`快过期` 分数只在内存，重启清零（分数由后台协程 20 秒后重建）。
+- **落盘与不落盘**：除上面「状态文件」列的五份外，没有其他持久化。写入是「脏数据 + 30 秒定时刷新 + 关闭时刷一次」，硬杀进程最多丢最近 30 秒的控制台历史（账号与令牌变动是即时写）。
 - **未实现 Responses / Anthropic 格式**：插件只声明 `chat-completions` 输入输出。
 - **控制台需要 CPA 的管理密钥**：数据接口由宿主鉴权，页面本身可以从
   `/v0/resource/plugins/magic2api/ui` 免密打开，但要在页面顶部填写一次
