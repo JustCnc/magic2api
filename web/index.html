@@ -336,7 +336,9 @@
         <button class="act" id="btn-save-settings">保存</button>
       </div>
       <div class="sub" style="margin-top:10px">
-        「自动领积分」和每天执行时间在 <b>积分 → 定时领取</b> 里设置，这里只管请求与限流参数。
+        「自动领积分」和每天执行时间在 <b>积分 → 定时领取</b> 里设置，这里只管请求与限流参数。<br />
+        <b>优先花快过期积分</b>：默认关闭。开启后，同一优先级的账号之间优先用「30 天内到期」最早的那个；
+        会主动改派宿主选中的账号，用量会集中到期最早的一个，分数后台每 5 分钟刷新一次。
       </div>
       <pre id="settings-json" style="margin-top:12px"></pre>
     </div>
@@ -1320,7 +1322,7 @@ async function loadSettings() {
   document.getElementById("set-attempts").value = cfg.max_attempts;
   document.getElementById("set-proxy").value = cfg.proxy_url || "";
   document.getElementById("set-points").checked = !!cfg.points_logging;
-  document.getElementById("set-prefer-expiring").checked = cfg.prefer_expiring_points !== false;
+  document.getElementById("set-prefer-expiring").checked = !!cfg.prefer_expiring_points;
   document.getElementById("set-debug").checked = !!cfg.debug_dump;
   document.getElementById("settings-json").textContent = JSON.stringify(cfg, null, 2);
 }
