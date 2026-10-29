@@ -258,7 +258,7 @@ func (a *app) listAccounts() []accountView {
 			JWTExpired:       c.jwtDeadLocked(time.Now()),
 			APIKeyExpiresAt:  c.APIKeyExpiresAt,
 			RefreshExpiresAt: c.RefreshTokenExpiresAt,
-			LastSuccess:      c.lastSuccess.UnixMilli(),
+			LastSuccess:      unixMilliOrZero(c.lastSuccess),
 			Failures:         c.failures,
 			LastError:        c.lastError,
 			Note:             c.Note,
@@ -745,7 +745,12 @@ func (a *app) managementPointsSummary(req managementRequest) managementResponse 
 		PendingTasks  int     `json:"pending_tasks"`
 		PendingReward float64 `json:"pending_reward"`
 		GiftClaimed   bool    `json:"gift_claimed"`
-		Error         string  `json:"error,omitempty"`
+		// Points with a deadline: soon = expiring within 30 days.
+		ExpiringSoon  float64          `json:"expiring_soon"`
+		ExpiringTotal float64          `json:"expiring_total"`
+		ExpiringAt    string           `json:"expiring_at,omitempty"`
+		Expiring      []expiringBucket `json:"expiring,omitempty"`
+		Error         string           `json:"error,omitempty"`
 	}
 
 	rows := make([]accountPoints, len(accounts))
@@ -763,11 +768,15 @@ func (a *app) managementPointsSummary(req managementRequest) managementResponse 
 			defer cancel()
 			summary := a.summarizePoints(ctx, account, true)
 
+			soon, total, buckets := expiringSummary(summary.Balance, time.Now(), 30*24*time.Hour)
 			row := accountPoints{
 				ID:            account.ID,
 				Alias:         account.Alias,
 				Phone:         maskPhone(account.Phone),
 				Balance:       summary.Balance.TotalPoints.Float64(),
+				ExpiringSoon:  soon,
+				ExpiringTotal: total,
+				Expiring:      buckets,
 				BalanceError:  summary.BalanceError,
 				TodayGift:     summary.Today.GiftPoints,
 				TodayTask:     summary.Today.TaskPoints,
@@ -782,6 +791,9 @@ func (a *app) managementPointsSummary(req managementRequest) managementResponse 
 					row.PendingTasks++
 					row.PendingReward += task.Points.Float64()
 				}
+			}
+			if len(buckets) > 0 {
+				row.ExpiringAt = buckets[0].ExpiresAt
 			}
 			if summary.RecordsError != "" {
 				row.Error = summary.RecordsError
@@ -799,6 +811,8 @@ func (a *app) managementPointsSummary(req managementRequest) managementResponse 
 		total.TodayConsumed += row.TodayConsumed
 		total.PendingTasks += row.PendingTasks
 		total.PendingReward += row.PendingReward
+		total.ExpiringSoon += row.ExpiringSoon
+		total.ExpiringTotal += row.ExpiringTotal
 		if row.GiftClaimed {
 			total.GiftClaimed = true
 		}
@@ -818,6 +832,8 @@ func (a *app) managementPointsSummary(req managementRequest) managementResponse 
 			"today_consumed":     total.TodayConsumed,
 			"pending_tasks":      total.PendingTasks,
 			"pending_reward":     total.PendingReward,
+			"expiring_soon":      total.ExpiringSoon,
+			"expiring_total":     total.ExpiringTotal,
 			"accounts":           len(rows),
 			"gift_claimed":       claimed,
 			"gift_claimed_count": claimed,

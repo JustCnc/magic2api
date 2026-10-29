@@ -115,13 +115,15 @@
   .pane.active { display: grid; }
 
   /* switch */
-  .switch { position: relative; display: inline-block; width: 38px; height: 22px; flex: 0 0 auto; }
-  .switch input { opacity: 0; width: 0; height: 0; }
-  .switch .track { position: absolute; inset: 0; background: #cfd6e4; border-radius: 999px; transition: .15s; cursor: pointer; }
-  .switch .track::after { content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%;
-                          background: #fff; top: 3px; left: 3px; transition: .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+  .switch { position: relative; display: inline-block; width: 40px; height: 22px; flex: 0 0 auto; vertical-align: middle; }
+  .switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+  .switch .track { position: absolute; inset: 0; display: block; margin: 0; padding: 0;
+                   background: #cfd6e4; border-radius: 999px; transition: background .15s; cursor: pointer; }
+  .switch .track::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px;
+                          margin: 0; border-radius: 50%; background: #fff;
+                          box-shadow: 0 1px 2px rgba(20,30,50,.25); transition: transform .15s; }
   .switch input:checked + .track { background: var(--ok); }
-  .switch input:checked + .track::after { transform: translateX(16px); }
+  .switch input:checked + .track::after { transform: translateX(18px); }
 
   /* points */
   .points-layout { display: grid; grid-template-columns: 300px 1fr; gap: 12px; align-items: start; }
@@ -148,6 +150,16 @@
   .task .reward { margin-left: auto; color: var(--accent); font-weight: 600; font-size: 13px; }
   .empty { display: grid; place-items: center; gap: 8px; padding: 56px 20px; color: var(--muted); text-align: center; }
   .empty .big { font-size: 32px; opacity: .45; }
+  .stat.warnstat { background: var(--warn-soft); border-color: #ecd9a8; }
+  .stat.warnstat .v { color: var(--warn); }
+  .expiring-box { margin-top: 12px; border-top: 1px dashed var(--line); padding-top: 10px; }
+  .expiring-title { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .expiring-list { display: flex; gap: 8px; flex-wrap: wrap; }
+  .expiring-item { font-size: 12px; color: var(--muted); background: var(--panel2);
+                   border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; }
+  .expiring-item b { color: var(--text); font-weight: 600; }
+  .expiring-item.soon { background: var(--warn-soft); border-color: #ecd9a8; color: var(--warn); }
+  .expiring-item.soon b { color: var(--warn); }
   .amount.plus { color: var(--ok); }
   .amount.minus { color: var(--err); }
 </style>
@@ -566,7 +578,7 @@ async function api(path, options) {
 }
 
 function fmtTime(ms) {
-  if (!ms) return "-";
+  if (!ms || ms <= 0) return "-";
   const d = new Date(ms);
   const pad = n => String(n).padStart(2, "0");
   return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
@@ -1032,6 +1044,7 @@ function renderPointsTotals(data) {
     stat("今日消耗", num(t.today_consumed)),
     stat("今日已领奖励", num(Number(t.today_gift) + Number(t.today_task)) + ` <small>${t.gift_claimed_count || 0}/${t.accounts || 0} 账号已领</small>`),
     stat("可领任务 / 奖励", (t.pending_tasks || 0) + " <small>约 +" + num(t.pending_reward) + "</small>"),
+    stat("30 天内过期", num(t.expiring_soon) + " <small>共 " + num(t.expiring_total) + " 有期限</small>"),
   ].join("");
 
   const schedule = data.schedule || {};
@@ -1055,8 +1068,24 @@ function renderPointsList(data) {
         <div class="name">${esc(a.alias)}</div>
         <div class="meta">${esc(a.phone || "未绑定")} · 今日 ${num(a.today_consumed)}</div>
       </div>
-      <div class="bal">${num(a.balance)}<small>积分</small></div>
+      <div class="bal">${num(a.balance)}<small>${a.expiring_soon > 0 ? "即将过期 " + num(a.expiring_soon) : "积分"}</small></div>
     </div>`).join("") || `<div class="empty"><div>没有账号</div></div>`;
+}
+
+// expiringOf mirrors the backend: 30 days counts as "soon", oldest first.
+function expiringOf(balance) {
+  const horizon = Date.now() + 30 * 86400000;
+  const items = (balance.expiring_quota_details || [])
+    .map(q => {
+      const at = String(q.expires_at || "");
+      const when = Date.parse(at.replace(" ", "T"));
+      return { points: Number(q.remaining_points || 0), expires_at: at, when: Number.isNaN(when) ? Infinity : when };
+    })
+    .filter(q => q.points > 0)
+    .sort((a, b) => a.when - b.when)
+    .map(q => Object.assign(q, { soon: q.when <= horizon }));
+  const soon = items.filter(q => q.soon).reduce((sum, q) => sum + q.points, 0);
+  return { soon, at: items.length ? items[0].expires_at : "", items: items.slice(0, 4) };
 }
 
 function renderPointsDetail(detail) {
@@ -1068,6 +1097,7 @@ function renderPointsDetail(detail) {
   const records = p.records || [];
   const pending = tasks.filter(t => t.status === "PENDING" && t.reward_status === "PENDING" && t.code !== "first_ai_work");
   const reward = pending.reduce((sum, t) => sum + Number(t.points || 0), 0);
+  const expiring = expiringOf(balance);
 
   document.getElementById("points-detail").innerHTML = `
     <div class="card">
@@ -1081,10 +1111,18 @@ function renderPointsDetail(detail) {
       </div>
       <div class="grid">
         <div class="stat accent"><div class="k">可用积分</div><div class="v">${num(balance.total_points)}</div></div>
+        <div class="stat ${expiring.soon > 0 ? "warnstat" : ""}"><div class="k">30 天内过期</div><div class="v">${expiring.soon > 0 ? num(expiring.soon) : "—"} <small>${expiring.at ? "最近 " + expiring.at.slice(5, 10) : "无期限"}</small></div></div>
         <div class="stat"><div class="k">今日登录奖励</div><div class="v">${today.gift_points ? "+" + num(today.gift_points) : "—"} <small>${today.last_claimed_date ? "已领取" : "未领取"}</small></div></div>
         <div class="stat"><div class="k">今日消耗</div><div class="v">${num(Math.abs(Number(today.consumed_points || 0)))}</div></div>
         <div class="stat"><div class="k">待领任务</div><div class="v">${pending.length} <small>约 +${num(reward)}</small></div></div>
       </div>
+      ${expiring.items.length ? `<div class="expiring-box">
+        <div class="expiring-title">有期限的积分</div>
+        <div class="expiring-list">
+          ${expiring.items.map(it => `<span class="expiring-item ${it.soon ? "soon" : ""}">
+            <b>${num(it.points)}</b> · ${esc(it.expires_at.slice(0, 16))} 到期</span>`).join("")}
+        </div>
+      </div>` : ""}
       ${p.balance_error ? `<div class="note-box" style="margin-top:12px">余额读取失败：${esc(p.balance_error)}</div>` : ""}
     </div>
 

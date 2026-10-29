@@ -668,3 +668,12 @@ func carryPrivateFields(existing, account *credential) {
 		account.AutoRelogin = auto
 	}
 }
+
+// unixMilliOrZero keeps Go's zero time out of JSON: 0001-01-01 would render as a
+// bogus date in the console instead of "—".
+func unixMilliOrZero(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.UnixMilli()
+}

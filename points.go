@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -515,4 +516,33 @@ func (a *app) pointsScheduleView(cfg Config) map[string]any {
 		"next_run": next.Format(time.RFC3339),
 		"now":      local.Format(time.RFC3339),
 	}
+}
+
+// expiringBucket is one batch of points with a deadline, oldest first.
+type expiringBucket struct {
+	Points    float64 `json:"points"`
+	ExpiresAt string  `json:"expires_at"`
+}
+
+// expiringSummary splits the quotas that carry a deadline into "expires within
+// the horizon" and "all of them", so the console can warn before points vanish.
+func expiringSummary(balance pointsBalance, now time.Time, horizon time.Duration) (soon, total float64, buckets []expiringBucket) {
+	limit := now.Add(horizon)
+	for _, quota := range balance.Expiring {
+		points := quota.RemainingPoints.Float64()
+		if points <= 0 {
+			continue
+		}
+		total += points
+		buckets = append(buckets, expiringBucket{Points: points, ExpiresAt: quota.ExpiresAt})
+		when, ok := parseServerTime(quota.ExpiresAt)
+		if ok && !when.After(limit) {
+			soon += points
+		}
+	}
+	sort.Slice(buckets, func(i, j int) bool { return buckets[i].ExpiresAt < buckets[j].ExpiresAt })
+	if len(buckets) > 4 {
+		buckets = buckets[:4]
+	}
+	return soon, total, buckets
 }
