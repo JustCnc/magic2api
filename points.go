@@ -101,7 +101,129 @@ func (a *app) balance(ctx context.Context, account *credential, force bool) (poi
 	cache.ok = true
 	cache.err = ""
 	cache.at = time.Now()
+	a.noteExpiry(account.ID, balance, cache.at)
 	return balance, nil
+}
+
+// expiryScore says how close an account is to losing points and how many of them
+// are at risk. Accounts without deadline-carrying quotas score zero, so routing
+// falls back to the plain priority/rotation order.
+type expiryScore struct {
+	Soon     float64   `json:"soon"`
+	Earliest time.Time `json:"earliest"`
+	At       time.Time `json:"at"`
+}
+
+// expiringSoonHorizon is the window the console calls "即将过期".
+const expiringSoonHorizon = 30 * 24 * time.Hour
+
+// expiryScoreOf reduces a balance to the numbers the router needs. Pure, so the
+// ranking stays testable.
+func expiryScoreOf(balance pointsBalance, now time.Time) expiryScore {
+	limit := now.Add(expiringSoonHorizon)
+	var score expiryScore
+	score.At = now
+	for _, quota := range balance.Expiring {
+		points := quota.RemainingPoints.Float64()
+		if points <= 0 {
+			continue
+		}
+		when, ok := parseServerTime(quota.ExpiresAt)
+		if !ok || when.After(limit) {
+			continue
+		}
+		score.Soon += points
+		if score.Earliest.IsZero() || when.Before(score.Earliest) {
+			score.Earliest = when
+		}
+	}
+	return score
+}
+
+// compareExpiry ranks two accounts: >0 means a should be spent before b.
+func compareExpiry(a, b expiryScore) int {
+	if a.Soon != b.Soon {
+		if a.Soon <= 0 {
+			return -1
+		}
+		if b.Soon <= 0 {
+			return 1
+		}
+	}
+	switch {
+	case a.Earliest.IsZero() && !b.Earliest.IsZero():
+		return -1
+	case !a.Earliest.IsZero() && b.Earliest.IsZero():
+		return 1
+	case !a.Earliest.IsZero() && a.Earliest.Before(b.Earliest):
+		return 1
+	case !a.Earliest.IsZero() && a.Earliest.After(b.Earliest):
+		return -1
+	case a.Soon > b.Soon:
+		return 1
+	case a.Soon < b.Soon:
+		return -1
+	}
+	return 0
+}
+
+func (a *app) noteExpiry(accountID string, balance pointsBalance, now time.Time) {
+	score := expiryScoreOf(balance, now)
+	a.expiryMu.Lock()
+	defer a.expiryMu.Unlock()
+	a.expiry[accountID] = score
+}
+
+func (a *app) expiryOf(accountID string) expiryScore {
+	if !a.currentConfig().PreferExpiringPoints {
+		return expiryScore{}
+	}
+	a.expiryMu.RLock()
+	defer a.expiryMu.RUnlock()
+	return a.expiry[accountID]
+}
+
+func (a *app) forgetExpiry(accountID string) {
+	a.expiryMu.Lock()
+	defer a.expiryMu.Unlock()
+	delete(a.expiry, accountID)
+}
+
+// expiryLoop keeps the expiry scores warm so the router can rank accounts
+// without waiting on the asset API inside a request.
+func (a *app) expiryLoop(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	timer := time.NewTimer(20 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		case <-ticker.C:
+		}
+		if !a.currentConfig().PreferExpiringPoints {
+			continue
+		}
+		a.refreshExpiryScores(ctx)
+	}
+}
+
+func (a *app) refreshExpiryScores(ctx context.Context) {
+	for _, account := range a.pool.snapshot() {
+		if ctx.Err() != nil {
+			return
+		}
+		if !usable(account) || account.cooling() {
+			continue
+		}
+		// balance() caches for a minute and keeps the last good numbers, so a
+		// failing account neither blocks nor blanks the ranking.
+		if _, err := a.balance(ctx, account, false); err != nil {
+			continue
+		}
+	}
 }
 
 // records lists the point ledger.
@@ -450,6 +572,7 @@ func (a *app) invalidatePoints(accountID string) {
 	cache.at = time.Time{}
 	cache.recAt = time.Time{}
 	cache.mu.Unlock()
+	a.forgetExpiry(accountID)
 }
 
 func formatPoints(value float64) string {

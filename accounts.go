@@ -253,6 +253,8 @@ type pool struct {
 	mu       sync.RWMutex
 	accounts map[string]*credential
 	order    []string
+	// expiry ranks equal-priority accounts by how soon their points lapse.
+	expiry func(id string) expiryScore
 }
 
 func newPool() *pool {
@@ -327,6 +329,11 @@ func (p *pool) choose(preferred string, tried map[string]bool) *credential {
 			// A cooling account must not win on stickiness alone: it would burn a
 			// whole attempt on a request that is expected to fail.
 			if c.ID == preferred && usable(c) && !c.cooling() && !tried[c.ID] {
+				// The host picked this account, but within the same priority an
+				// account whose points lapse sooner should get the request.
+				if peer := p.expiringPeer(c, candidates, tried); peer != nil {
+					return peer
+				}
 				return c
 			}
 		}
@@ -359,12 +366,56 @@ func (p *pool) choose(preferred string, tried map[string]bool) *credential {
 			}
 			continue
 		}
+		// Same priority: spend the balance that would lapse first. The hook is
+		// nil in tests and for callers that build a bare pool, which keeps the
+		// plain rotation order.
+		if p.expiry != nil {
+			switch compareExpiry(p.expiry(c.ID), p.expiry(best.ID)) {
+			case 1:
+				best = c
+				continue
+			case -1:
+				continue
+			}
+		}
 		if lastSuccess.After(bestSuccess) {
 			best = c
 			continue
 		}
 		if lastSuccess.Equal(bestSuccess) && updated > bestUpdated {
 			best = c
+		}
+	}
+	return best
+}
+
+// expiringPeer returns a usable same-priority account whose balance lapses
+// sooner than the one the host picked. nil keeps the host's choice.
+func (p *pool) expiringPeer(c *credential, candidates []*credential, tried map[string]bool) *credential {
+	if p.expiry == nil {
+		return nil
+	}
+	mine := p.expiry(c.ID)
+	c.mu.Lock()
+	minePriority := c.Priority
+	c.mu.Unlock()
+	var best *credential
+	for _, peer := range candidates {
+		if peer.ID == c.ID || tried[peer.ID] || !usable(peer) || peer.cooling() {
+			continue
+		}
+		peer.mu.Lock()
+		priority := peer.Priority
+		peer.mu.Unlock()
+		if priority != minePriority {
+			continue
+		}
+		score := p.expiry(peer.ID)
+		if compareExpiry(score, mine) <= 0 {
+			continue
+		}
+		if best == nil || compareExpiry(score, p.expiry(best.ID)) > 0 {
+			best = peer
 		}
 	}
 	return best

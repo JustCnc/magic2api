@@ -312,6 +312,7 @@ func (a *app) settingsView() map[string]any {
 		"request_timeout_seconds": cfg.RequestTimeoutSeconds,
 		"max_attempts":            cfg.MaxAttempts,
 		"points_logging":          cfg.PointsLogging,
+		"prefer_expiring_points":  cfg.PreferExpiringPoints,
 		"daily_points_enabled":    cfg.DailyPointsEnabled,
 		"points_schedule_time":    cfg.PointsScheduleTime,
 		"proxy_url":               cfg.ProxyURL,
@@ -345,6 +346,9 @@ func (a *app) managementSaveSettings(req managementRequest) managementResponse {
 	}
 	if v, ok := patch["points_logging"]; ok {
 		cfg.PointsLogging = toBool(v, cfg.PointsLogging)
+	}
+	if v, ok := patch["prefer_expiring_points"]; ok {
+		cfg.PreferExpiringPoints = toBool(v, cfg.PreferExpiringPoints)
 	}
 	if v, ok := patch["daily_points_enabled"]; ok {
 		cfg.DailyPointsEnabled = toBool(v, cfg.DailyPointsEnabled)

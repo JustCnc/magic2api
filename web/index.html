@@ -331,6 +331,7 @@
       </div>
       <div class="row" style="margin-top:12px">
         <label style="flex:0 0 auto"><span>积分回填</span><input id="set-points" type="checkbox" style="width:auto" /></label>
+        <label style="flex:0 0 auto"><span>优先花快过期积分</span><input id="set-prefer-expiring" type="checkbox" style="width:auto" /></label>
         <label style="flex:0 0 auto"><span>调试日志</span><input id="set-debug" type="checkbox" style="width:auto" /></label>
         <button class="act" id="btn-save-settings">保存</button>
       </div>
@@ -1319,6 +1320,7 @@ async function loadSettings() {
   document.getElementById("set-attempts").value = cfg.max_attempts;
   document.getElementById("set-proxy").value = cfg.proxy_url || "";
   document.getElementById("set-points").checked = !!cfg.points_logging;
+  document.getElementById("set-prefer-expiring").checked = cfg.prefer_expiring_points !== false;
   document.getElementById("set-debug").checked = !!cfg.debug_dump;
   document.getElementById("settings-json").textContent = JSON.stringify(cfg, null, 2);
 }
@@ -1333,6 +1335,7 @@ document.getElementById("btn-save-settings").addEventListener("click", async eve
       max_attempts: Number(document.getElementById("set-attempts").value),
       proxy_url: document.getElementById("set-proxy").value.trim(),
       points_logging: document.getElementById("set-points").checked,
+      prefer_expiring_points: document.getElementById("set-prefer-expiring").checked,
       debug_dump: document.getElementById("set-debug").checked,
     };
     const cfg = await api("/settings", { method: "POST", body: JSON.stringify(patch) });

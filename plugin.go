@@ -48,6 +48,10 @@ type app struct {
 	points   map[string]*pointsCache
 	// pointsQueue bounds the ledger backfill work: one worker, drop when full.
 	pointsQueue chan pointsJob
+	// expiry caches how close each account is to losing points, used to route
+	// traffic onto balances that would otherwise lapse.
+	expiryMu sync.RWMutex
+	expiry   map[string]expiryScore
 
 	loginMu sync.Mutex
 	logins  map[string]*loginSession
@@ -61,6 +65,7 @@ var plugin = &app{
 	published:   make(map[string]string),
 	publishGate: newRateGate(12, 10*time.Second),
 	points:      make(map[string]*pointsCache),
+	expiry:      make(map[string]expiryScore),
 	logins:      make(map[string]*loginSession),
 }
 
@@ -105,6 +110,7 @@ func (a *app) configure(raw []byte) error {
 	if a.accounts == nil {
 		a.accounts = newAccountManager(a)
 	}
+	a.pool.expiry = a.expiryOf
 	if a.pointsQueue == nil {
 		a.pointsQueue = make(chan pointsJob, 256)
 	}
@@ -190,6 +196,7 @@ func (a *app) startBackground() {
 
 	a.spawn("maintenance", func() { a.maintenanceLoop(ctx) })
 	a.spawn("points", func() { a.dailyPointsLoop(ctx) })
+	a.spawn("expiry", func() { a.expiryLoop(ctx) })
 	a.spawn("points-queue", func() { a.pointsWorker(ctx) })
 	go func() {
 		<-ctx.Done()

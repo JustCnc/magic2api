@@ -916,3 +916,111 @@ func TestRequestIDMatchesClientFormat(t *testing.T) {
 		t.Fatal("random part repeats between calls")
 	}
 }
+
+type expiryCase struct {
+	Amount flexFloat
+	At     time.Time
+}
+
+func balanceWithExpiring(cases ...expiryCase) pointsBalance {
+	var balance pointsBalance
+	for i, c := range cases {
+		var quota struct {
+			QuotaID         flexID    `json:"quota_id"`
+			ExpiresAt       string    `json:"expires_at"`
+			RemainingPoints flexFloat `json:"remaining_points"`
+		}
+		quota.QuotaID = flexID(strconv.Itoa(i + 1))
+		quota.ExpiresAt = c.At.In(serverZone).Format("2006-01-02 15:04:05")
+		quota.RemainingPoints = c.Amount
+		balance.Expiring = append(balance.Expiring, quota)
+	}
+	return balance
+}
+
+func TestCompareExpiryRanksLapsingBalances(t *testing.T) {
+	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
+	tomorrow := expiryScoreOf(balanceWithExpiring(expiryCase{700, now.Add(24 * time.Hour)}), now)
+	nextMonth := expiryScoreOf(balanceWithExpiring(expiryCase{100, now.Add(20 * 24 * time.Hour)}), now)
+	farAway := expiryScoreOf(balanceWithExpiring(expiryCase{5000, now.Add(400 * 24 * time.Hour)}), now)
+	empty := expiryScoreOf(pointsBalance{}, now)
+
+	if tomorrow.Soon != 700 {
+		t.Fatalf("soon = %v, want 700", tomorrow.Soon)
+	}
+	if farAway.Soon != 0 {
+		t.Fatalf("points beyond the horizon counted as soon: %v", farAway.Soon)
+	}
+	// The soonest deadline wins even against a larger amount further out.
+	if got := compareExpiry(tomorrow, nextMonth); got != 1 {
+		t.Fatalf("tomorrow vs next month = %d, want 1", got)
+	}
+	// Anything at risk beats a balance that never lapses.
+	if got := compareExpiry(nextMonth, empty); got != 1 {
+		t.Fatalf("soon vs empty = %d, want 1", got)
+	}
+	if got := compareExpiry(nextMonth, farAway); got != 1 {
+		t.Fatalf("soon vs far away = %d, want 1", got)
+	}
+	if got := compareExpiry(empty, empty); got != 0 {
+		t.Fatalf("empty vs empty = %d, want 0", got)
+	}
+	// Same deadline: burn the bigger batch first.
+	sameDay := expiryScoreOf(balanceWithExpiring(expiryCase{300, now.Add(48 * time.Hour)}), now)
+	if got := compareExpiry(sameDay, tomorrow); got != -1 {
+		t.Fatalf("smaller same-deadline batch = %d, want -1", got)
+	}
+}
+
+func TestPoolChoosePrefersExpiringPointsAtSamePriority(t *testing.T) {
+	now := time.Now()
+	p := newPool()
+	lapsing := &credential{ID: "lapsing", Alias: "lapsing", Authorization: "a", OrganizationCode: "o", Priority: 5, UpdatedAt: 1}
+	fresh := &credential{ID: "fresh", Alias: "fresh", Authorization: "a", OrganizationCode: "o", Priority: 5, UpdatedAt: 2}
+	p.put(lapsing)
+	p.put(fresh)
+	// Without scores the plain rotation order (most recent success) decides.
+	if got := p.choose("", nil); got == nil || got.ID != "fresh" {
+		t.Fatalf("chose %v, want fresh before scores exist", got)
+	}
+	scores := map[string]expiryScore{
+		"lapsing": expiryScoreOf(balanceWithExpiring(expiryCase{900, now.Add(6 * time.Hour)}), now),
+	}
+	p.expiry = func(id string) expiryScore { return scores[id] }
+	if got := p.choose("", nil); got == nil || got.ID != "lapsing" {
+		t.Fatalf("chose %v, want the lapsing balance", got)
+	}
+	// A higher priority still wins over a lapsing balance further down.
+	fresh.Priority = 6
+	if got := p.choose("", nil); got == nil || got.ID != "fresh" {
+		t.Fatalf("expiry outranked priority: %v", got)
+	}
+}
+
+func TestPoolOverridesHostPickForLapsingBalance(t *testing.T) {
+	now := time.Now()
+	p := newPool()
+	host := &credential{ID: "host", Alias: "host", Authorization: "a", OrganizationCode: "o", Priority: 5, UpdatedAt: 2}
+	lapsing := &credential{ID: "lapsing", Alias: "lapsing", Authorization: "a", OrganizationCode: "o", Priority: 5, UpdatedAt: 1}
+	senior := &credential{ID: "senior", Alias: "senior", Authorization: "a", OrganizationCode: "o", Priority: 9, UpdatedAt: 1}
+	p.put(host)
+	p.put(lapsing)
+	p.put(senior)
+	scores := map[string]expiryScore{
+		"lapsing": expiryScoreOf(balanceWithExpiring(expiryCase{900, now.Add(4 * time.Hour)}), now),
+		"senior":  expiryScoreOf(balanceWithExpiring(expiryCase{900, now.Add(1 * time.Hour)}), now),
+	}
+	p.expiry = func(id string) expiryScore { return scores[id] }
+	// Same priority, sooner deadline: the host's pick is overridden.
+	if got := p.choose("host", nil); got == nil || got.ID != "lapsing" {
+		t.Fatalf("chose %v, want the lapsing peer", got)
+	}
+	// Stickiness survives when nobody at that priority lapses sooner.
+	if got := p.choose("lapsing", nil); got == nil || got.ID != "lapsing" {
+		t.Fatalf("chose %v, want the host pick kept", got)
+	}
+	// A higher-priority account is not hijacked by an expiry score.
+	if got := p.choose("senior", nil); got == nil || got.ID != "senior" {
+		t.Fatalf("chose %v, want the senior account", got)
+	}
+}

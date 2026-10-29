@@ -47,6 +47,8 @@ plugins:
       # 积分：请求结束后回查流水回填消耗；后台领取每日登录积分与新人任务
       points_logging: true
       daily_points_enabled: true
+      # 同优先级账号之间，优先消耗最早到期的积分
+      prefer_expiring_points: true
 
       # 出站代理（留空直连），例如 http://127.0.0.1:7897
       proxy_url: ""

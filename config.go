@@ -57,6 +57,9 @@ type Config struct {
 	// PointsLogging attaches the point cost of each request to the console's
 	// request log by matching the asset ledger after the fact.
 	PointsLogging bool `yaml:"points_logging"`
+	// PreferExpiringPoints ranks equal-priority accounts so the balance that
+	// expires first is spent first.
+	PreferExpiringPoints bool `yaml:"prefer_expiring_points"`
 	// DailyPointsEnabled claims the daily login gift and the manual onboarding
 	// rewards for every account.
 	DailyPointsEnabled bool `yaml:"daily_points_enabled"`
@@ -93,6 +96,7 @@ func defaultConfig() Config {
 		RequestTimeoutSeconds: 300,
 		MaxAttempts:           3,
 		PointsLogging:         true,
+		PreferExpiringPoints:  true,
 		DailyPointsEnabled:    true,
 		PointsScheduleTime:    defaultPointsSchedule,
 	}
