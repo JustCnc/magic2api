@@ -642,6 +642,9 @@ func (a *app) parseAuth(raw []byte) ([]byte, error) {
 		account.UserID = existing.UserID
 		account.Note = existing.Note
 		account.bucket = existing.bucket
+		// The re-login password is ours alone: the host credential record never
+		// carries it, so it has to survive the parse.
+		carryPrivateFields(existing, account)
 	}
 	a.pool.put(account)
 	a.persistAccounts()
@@ -713,31 +716,75 @@ func (a *app) resolveOrganization(ctx context.Context, authorization string) (st
 	if errUnwrap != nil {
 		return "", errUnwrap
 	}
-	var probe struct {
-		Organizations []struct {
-			OrganizationCode string `json:"organization_code"`
-			MagicOrgCode     string `json:"magic_organization_code"`
-			Current          bool   `json:"current"`
-		} `json:"organizations"`
-		OrganizationCode string `json:"organization_code"`
-		MagicOrgCode     string `json:"magic_organization_code"`
+	org, ok := pickOrganization(data)
+	if !ok {
+		return "", fmt.Errorf("auth/status 未返回组织信息：%s", truncateText(string(data), 200))
 	}
-	if err := json.Unmarshal(data, &probe); err != nil {
-		return "", fmt.Errorf("解析 auth/status 失败：%w", err)
-	}
-	for _, org := range probe.Organizations {
-		if org.MagicOrgCode != "" {
-			return org.MagicOrgCode, nil
+	return org, nil
+}
+
+// orgEntry is one organisation as the asset API reports it. Accounts created in
+// the web client come back as a flat array of these, older ones nest them under
+// "organizations" with slightly different field names, so both shapes are read.
+type orgEntry struct {
+	OrganizationCode     string `json:"organization_code"`
+	MagicOrgCode         string `json:"magic_organization_code"`
+	TeamshareOrgCode     string `json:"teamshare_organization_code"`
+	ThirdPlatformOrgCode string `json:"third_platform_organization_code"`
+	ThirdPlatformType    string `json:"third_platform_type"`
+	OrganizationName     string `json:"organization_name"`
+	Current              bool   `json:"current"`
+}
+
+// code returns the most specific organisation code the entry carries.
+func (e orgEntry) code() string {
+	for _, candidate := range []string{e.MagicOrgCode, e.OrganizationCode, e.TeamshareOrgCode, e.ThirdPlatformOrgCode} {
+		if strings.TrimSpace(candidate) != "" {
+			return strings.TrimSpace(candidate)
 		}
-		if org.OrganizationCode != "" {
-			return org.OrganizationCode, nil
+	}
+	return ""
+}
+
+// pickOrganization accepts either shape and prefers the current (or first)
+// organisation that actually carries a code.
+func pickOrganization(data json.RawMessage) (string, bool) {
+	var wrapped struct {
+		Organizations []orgEntry `json:"organizations"`
+	}
+	if err := json.Unmarshal(data, &wrapped); err == nil && len(wrapped.Organizations) > 0 {
+		var fallback string
+		for _, entry := range wrapped.Organizations {
+			code := entry.code()
+			if code == "" {
+				continue
+			}
+			if entry.Current {
+				return code, true
+			}
+			if fallback == "" {
+				fallback = code
+			}
+		}
+		if fallback != "" {
+			return fallback, true
 		}
 	}
-	if probe.MagicOrgCode != "" {
-		return probe.MagicOrgCode, nil
+	// Flat form: [{"magic_organization_code":"...", ...}]
+	var flat []orgEntry
+	if err := json.Unmarshal(data, &flat); err == nil {
+		for _, entry := range flat {
+			if code := entry.code(); code != "" {
+				return code, true
+			}
+		}
 	}
-	if probe.OrganizationCode != "" {
-		return probe.OrganizationCode, nil
+	// Single object form.
+	var single orgEntry
+	if err := json.Unmarshal(data, &single); err == nil {
+		if code := single.code(); code != "" {
+			return code, true
+		}
 	}
-	return "", fmt.Errorf("auth/status 未返回组织信息")
+	return "", false
 }

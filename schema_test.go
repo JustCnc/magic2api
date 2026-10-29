@@ -821,3 +821,41 @@ func TestUpdateAccountRenameKeepsID(t *testing.T) {
 		t.Fatalf("bad alias accepted: %d %s", resp.StatusCode, resp.Body)
 	}
 }
+
+func TestPickOrganizationShapes(t *testing.T) {
+	// New accounts (web client): data is a flat array.
+	flat := json.RawMessage(`[{"magic_id":"974331964651315201","organization_name":"",
+		"magic_organization_code":"11ld4mob5ll7","third_platform_organization_code":"11ld4mob5ll7",
+		"third_platform_type":"teamshare","teamshare_organization_code":"11ld4mob5ll7"}]`)
+	if got, ok := pickOrganization(flat); !ok || got != "11ld4mob5ll7" {
+		t.Fatalf("flat shape: %q %v", got, ok)
+	}
+
+	// Older accounts: nested under organizations, current flag wins.
+	nested := json.RawMessage(`{"organizations":[
+		{"organization_code":"first","magic_organization_code":"m-first","current":false},
+		{"organization_code":"second","magic_organization_code":"m-second","current":true}],
+		"organization_code":"outer","magic_organization_code":"m-outer"}`)
+	if got, ok := pickOrganization(nested); !ok || got != "m-second" {
+		t.Fatalf("nested shape: %q %v", got, ok)
+	}
+
+	// Only teamshare codes present.
+	teamshare := json.RawMessage(`[{"teamshare_organization_code":"ts-only"}]`)
+	if got, ok := pickOrganization(teamshare); !ok || got != "ts-only" {
+		t.Fatalf("teamshare fallback: %q %v", got, ok)
+	}
+
+	// Single object.
+	single := json.RawMessage(`{"organization_code":"solo"}`)
+	if got, ok := pickOrganization(single); !ok || got != "solo" {
+		t.Fatalf("single object: %q %v", got, ok)
+	}
+
+	// Nothing usable.
+	for _, raw := range []string{`[]`, `{}`, `[{"organization_name":"x"}]`, `null`} {
+		if got, ok := pickOrganization(json.RawMessage(raw)); ok {
+			t.Fatalf("%s produced %q", raw, got)
+		}
+	}
+}

@@ -638,6 +638,7 @@ func (a *app) scanAccountsDir(cfg Config) {
 			account.RefreshToken = existing.RefreshToken
 			account.APIKeyExpiresAt = existing.APIKeyExpiresAt
 			account.RefreshTokenExpiresAt = existing.RefreshTokenExpiresAt
+			carryPrivateFields(existing, account)
 		}
 		account.bucket = newTokenBucket(cfg.RPM, cfg.Burst)
 		a.pool.put(account)
@@ -650,5 +651,20 @@ func (a *app) scanAccountsDir(cfg Config) {
 			// removed again on the following scan.
 			a.persistAccounts()
 		}
+	}
+}
+
+// carryPrivateFields copies the state that only lives in the plugin (never in a
+// host credential record) onto a credential rebuilt from such a record.
+func carryPrivateFields(existing, account *credential) {
+	existing.mu.Lock()
+	password, auto := existing.Password, existing.AutoRelogin
+	if existing.Phone != "" && !isRealPhone(account.Phone) {
+		account.Phone = existing.Phone
+	}
+	existing.mu.Unlock()
+	if password != "" && account.Password == "" {
+		account.Password = password
+		account.AutoRelogin = auto
 	}
 }

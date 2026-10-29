@@ -547,7 +547,13 @@ async function api(path, options) {
   const text = await response.text();
   let payload = null;
   try { payload = text ? JSON.parse(text) : null; } catch (err) {
-    toast("响应不是 JSON：" + text.slice(0, 120), "err");
+    // A gateway or reverse proxy answers with HTML when it blocks the call; say
+    // which request failed instead of dumping the page into a toast.
+    const html = /^s*</.test(text);
+    const where = "HTTP " + response.status + " " + path;
+    toast(html
+      ? where + " 返回的是 HTML 而不是 JSON（多半是反代/网关拦截或地址不对）"
+      : where + " 返回的不是 JSON：" + text.slice(0, 120), "err");
     throw new Error("bad response");
   }
   if (payload && payload.ok === false) {
