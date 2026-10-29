@@ -253,6 +253,7 @@ func (a *app) maintainOnce(ctx context.Context) {
 	a.scanAccountsDir(cfg)
 	a.refreshStaleAccounts(ctx)
 	a.ensureHostRecords()
+	a.refreshMissingProfiles()
 
 	snapshot := a.snapshotCatalog()
 	if len(snapshot.Models) == 0 || time.Since(snapshot.FetchedAt) > time.Duration(cfg.RefreshSeconds)*time.Second {
@@ -261,6 +262,21 @@ func (a *app) maintainOnce(ctx context.Context) {
 			a.log.warn("catalog", "模型目录刷新失败："+err.Error())
 		}
 		cancel()
+	}
+}
+
+// refreshMissingProfiles fills in the console's user column one account per
+// tick, so a restart does not leave every account without a nickname.
+func (a *app) refreshMissingProfiles() {
+	for _, account := range a.pool.snapshot() {
+		account.mu.Lock()
+		missing := account.Nickname == "" && account.Phone == ""
+		account.mu.Unlock()
+		if !missing {
+			continue
+		}
+		a.spawn("profile", func() { a.refreshAccountInfo(account) })
+		return
 	}
 }
 
