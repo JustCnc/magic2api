@@ -1049,13 +1049,18 @@ func (a *app) managementLoginToken(req managementRequest) managementResponse {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
+	// Always touch the API once: a pasted token is worthless if it is expired or
+	// belongs to another tenant, and the check also yields the org when the user
+	// left the field empty.
+	resolved, errResolve := a.resolveOrganization(ctx, body.Authorization)
+	if errResolve != nil {
+		return failResponse(http.StatusBadGateway, "登录态无效："+asFailure(errResolve).Message)
+	}
 	org := strings.TrimSpace(body.OrganizationCode)
 	if org == "" {
-		resolved, err := a.resolveOrganization(ctx, body.Authorization)
-		if err != nil {
-			return failResponse(http.StatusBadGateway, "无法确定组织编码："+asFailure(err).Message)
-		}
 		org = resolved
+	} else if org != resolved {
+		a.log.warn("login", fmt.Sprintf("导入的组织编码 %s 与令牌返回的 %s 不一致，按填写的处理", org, resolved))
 	}
 	alias := sanitizeAlias(body.Alias)
 	if alias == "" {

@@ -394,9 +394,11 @@
       </div>
 
       <div class="pane" id="pane-jwt">
-        <label><span>登录态 JSON</span>
-          <textarea id="login-token" placeholder='{"authorization":"eyJ...","organization_code":"h70imn51gp0f"}'></textarea></label>
-        <div class="sub">可从桌面端 <code>MAGIC:user:authorization</code>、网页版 localStorage 或任意请求头里取。</div>
+        <label><span>authorization（登录令牌 JWT）</span>
+          <textarea id="login-token-auth" rows="3" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9==.eyJpc3Mi…"></textarea></label>
+        <label><span>organization-code（可留空，插件会自己查）</span>
+          <input id="login-token-org" placeholder="h70imn51gp0f" /></label>
+        <div class="sub">令牌可从桌面端 <code>MAGIC:user:authorization</code>、网页版 localStorage 或任意请求头的 <code>authorization</code> 里取。</div>
       </div>
 
       <div class="pane" id="pane-file">
@@ -809,8 +811,18 @@ document.getElementById("add-seg").addEventListener("click", event => {
 document.getElementById("login-file").addEventListener("change", async event => {
   const file = event.target.files && event.target.files[0];
   if (!file) return;
-  const text = await file.text();
-  document.getElementById("login-token").value = text;
+  const text = (await file.text()).trim();
+  let authorization = text;
+  let organization = "";
+  if (text.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(text);
+      authorization = parsed.authorization || parsed.access_token || parsed.accessToken || "";
+      organization = parsed.organization_code || parsed.organizationCode || "";
+    } catch (err) { toast("JSON 解析失败：" + err.message, "err"); return; }
+  }
+  if (!authorization) { toast("文件里没有 authorization", "err"); return; }
+  fillLoginToken(authorization, organization);
   document.querySelectorAll("#add-seg button").forEach(b => b.classList.toggle("active", b.dataset.pane === "pane-jwt"));
   document.querySelectorAll("#modal-add .pane").forEach(p => p.classList.remove("active"));
   document.getElementById("pane-jwt").classList.add("active");
@@ -894,16 +906,24 @@ document.getElementById("btn-send-sms").addEventListener("click", async event =>
 
 document.getElementById("btn-login-sms").addEventListener("click", () => document.getElementById("btn-login-submit").click());
 
+// fillLoginToken is shared by the file import and the paste pane.
+function fillLoginToken(authorization, organization) {
+  document.getElementById("login-token-auth").value = authorization || "";
+  document.getElementById("login-token-org").value = organization || "";
+}
+
 document.getElementById("btn-login-token").addEventListener("click", async event => {
-  const raw = document.getElementById("login-token").value.trim();
-  if (!raw) { toast("请粘贴登录态", "err"); return; }
-  let payload = { authorization: raw };
+  const raw = document.getElementById("login-token-auth").value.trim();
+  const org = document.getElementById("login-token-org").value.trim();
+  if (!raw) { toast("请填写 authorization", "err"); return; }
+  let payload = { authorization: raw, organization_code: org };
+  // Tolerate a whole record pasted into the authorization box.
   if (raw.startsWith("{")) {
     try {
       const parsed = JSON.parse(raw);
       payload = {
         authorization: parsed.authorization || parsed.access_token || parsed.accessToken,
-        organization_code: parsed.organization_code || parsed.organizationCode || "",
+        organization_code: parsed.organization_code || parsed.organizationCode || org,
         alias: parsed.alias || "",
         priority: parsed.priority || 0,
         password: parsed.password || "",
@@ -911,6 +931,9 @@ document.getElementById("btn-login-token").addEventListener("click", async event
       };
     } catch (err) { toast("JSON 解析失败：" + err.message, "err"); return; }
   }
+  // The typed organisation wins; otherwise keep whatever the pasted record had.
+  if (org) payload.organization_code = org;
+  else if (!payload.organization_code) delete payload.organization_code;
   if (!payload.authorization) { toast("缺少 authorization", "err"); return; }
   if (!payload.alias) {
     const typed = document.getElementById("login-alias").value.trim();
