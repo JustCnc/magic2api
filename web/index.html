@@ -6,9 +6,10 @@
 <title>Magic2API 控制台</title>
 <style>
   :root {
-    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --line: #2a2f3a;
-    --text: #e6e8ee; --muted: #9aa3b2; --accent: #5b8cff; --ok: #35c98a;
-    --warn: #f0b23f; --err: #f2585b;
+    color-scheme: light;
+    --bg: #f5f6f8; --panel: #ffffff; --panel2: #f3f5f8; --line: #e2e6ee;
+    --text: #1e2430; --muted: #6b7280; --accent: #2f6bff; --ok: #0f9d58;
+    --warn: #a86700; --err: #d93025; --hover: #f7f9fc; --code: #f6f7f9;
   }
   * { box-sizing: border-box; }
   body { margin: 0; font: 14px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
@@ -35,12 +36,12 @@
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
   th { position: sticky; top: 0; background: var(--panel2); color: var(--muted); font-weight: 500; z-index: 1; }
-  tbody tr:hover { background: #1b1f27; }
+  tbody tr:hover { background: var(--hover); }
   .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line); }
-  .pill.ok { color: var(--ok); border-color: #245c45; }
-  .pill.warn { color: var(--warn); border-color: #5b4720; }
-  .pill.err { color: var(--err); border-color: #5f2b2d; }
-  button.act { background: var(--accent); color: #fff; border: 0; border-radius: 7px; padding: 6px 12px;
+  .pill.ok { color: var(--ok); border-color: #b3ddc5; background: #f0faf4; }
+  .pill.warn { color: var(--warn); border-color: #ecd9a8; background: #fff8e6; }
+  .pill.err { color: var(--err); border-color: #f3c3c0; background: #fdf2f1; }
+  button.act { background: var(--accent); color: #ffffff; border: 0; border-radius: 7px; padding: 6px 12px;
                cursor: pointer; font-size: 13px; }
   button.act.ghost { background: transparent; border: 1px solid var(--line); color: var(--text); }
   button.act:disabled { opacity: .5; cursor: not-allowed; }
@@ -50,13 +51,14 @@
   .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
   .row > label { flex: 1 1 200px; }
   label span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
-  pre { margin: 0; padding: 10px; background: #0b0d11; border-radius: 8px; overflow: auto; max-height: 320px; font-size: 12px; }
+  pre { margin: 0; padding: 10px; background: var(--code); border: 1px solid var(--line); border-radius: 8px; overflow: auto; max-height: 320px; font-size: 12px; }
   .toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 99; }
-  .toast { padding: 9px 14px; border-radius: 8px; background: var(--panel2); border: 1px solid var(--line); font-size: 13px; max-width: 420px; }
-  .toast.ok { border-color: #245c45; }
-  .toast.err { border-color: #5f2b2d; }
-  .keybar { display: flex; gap: 10px; align-items: center; padding: 10px 18px; background: #2a2118;
-            border-bottom: 1px solid #5b4720; color: var(--warn); font-size: 13px; }
+  .toast { padding: 9px 14px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line);
+           box-shadow: 0 6px 18px rgba(20, 30, 50, .10); font-size: 13px; max-width: 420px; }
+  .toast.ok { border-color: #b3ddc5; background: #f0faf4; }
+  .toast.err { border-color: #f3c3c0; background: #fdf2f1; }
+  .keybar { display: flex; gap: 10px; align-items: center; padding: 10px 18px; background: #fff8e6;
+            border-bottom: 1px solid #ecd9a8; color: var(--warn); font-size: 13px; }
   .keybar input { max-width: 320px; }
   .muted { color: var(--muted); }
   .flex { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
@@ -139,7 +141,9 @@
       </div>
     </div>
     <div class="card">
-      <h2>账号池 <span class="muted" id="accounts-count"></span></h2>
+      <div class="flex"><h2 style="margin:0">账号池 <span class="muted" id="accounts-count"></span></h2>
+        <span class="spacer"></span>
+        <button class="act ghost" id="btn-export-all">导出全部</button></div>
       <div class="scroll"><table>
         <thead><tr><th>别名</th><th>用户</th><th>组织</th><th>设备</th><th>优先级</th><th>api-key</th><th>状态</th><th>操作</th></tr></thead>
         <tbody id="accounts-body"></tbody>
@@ -419,10 +423,46 @@ async function loadAccounts() {
         <button class="act ghost" data-act="refresh" data-id="${esc(a.id)}">续期</button>
         <button class="act ghost" data-act="toggle" data-id="${esc(a.id)}" data-disabled="${a.disabled}">${a.disabled ? "启用" : "禁用"}</button>
         ${a.dead ? `<button class="act ghost" data-act="revive" data-id="${esc(a.id)}">复活</button>` : ""}
+        <button class="act ghost" data-act="export" data-id="${esc(a.id)}">导出</button>
         <button class="act ghost" data-act="delete" data-id="${esc(a.id)}">删除</button>
       </td></tr>`;
   }).join("");
 }
+
+// Downloads travel through fetch because the management key sits in a header,
+// then the blob is handed to the browser as a file.
+async function downloadFile(path, fallbackName) {
+  const headers = {};
+  if (state.key) { headers.Authorization = "Bearer " + state.key; headers["X-Management-Key"] = state.key; }
+  const response = await fetch(API + path, { headers });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error("HTTP " + response.status + (detail ? "：" + detail.slice(0, 160) : ""));
+  }
+  const disposition = response.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="([^"]+)"/);
+  const name = match ? match[1] : fallbackName;
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = name;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+  return name;
+}
+
+async function exportAccounts(id) {
+  try {
+    const name = await downloadFile("/accounts/export" + (id ? "?id=" + encodeURIComponent(id) : ""),
+      id ? id + ".json" : "magic2api-accounts.json");
+    toast("已导出 " + name, "ok");
+  } catch (err) { toast("导出失败：" + err.message, "err"); }
+}
+
+document.getElementById("btn-export-all").addEventListener("click", () => exportAccounts(""));
 
 document.getElementById("accounts-body").addEventListener("click", async event => {
   const button = event.target.closest("button[data-act]");
@@ -440,6 +480,10 @@ document.getElementById("accounts-body").addEventListener("click", async event =
     } else if (button.dataset.act === "revive") {
       await api("/accounts/update", { method: "POST", body: JSON.stringify({ id, dead: false }) });
       toast("已复活", "ok");
+    } else if (button.dataset.act === "export") {
+      button.disabled = false;
+      await exportAccounts(id);
+      return;
     } else if (button.dataset.act === "delete") {
       if (!confirm("确认删除账号 " + id + "？")) return;
       await api("/accounts/delete", { method: "POST", body: JSON.stringify({ id }) });

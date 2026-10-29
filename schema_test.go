@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math/big"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -464,5 +465,62 @@ func TestManagementPathNormalisation(t *testing.T) {
 		if got := normalizeManagementPath(input); got != want {
 			t.Errorf("normalizeManagementPath(%q) = %q, want %q", input, got, want)
 		}
+	}
+}
+
+func TestExportAccountsSingleAndPool(t *testing.T) {
+	a := &app{pool: newPool(), log: newLogRing(20)}
+	a.pool.put(&credential{
+		ID: "acc-1", Alias: "主账号", Authorization: "jwt-token", OrganizationCode: "h70imn51gp0f",
+		APIKey: "mgw_abc", RefreshToken: "rt_abc", Priority: 2, Note: "备注",
+		Device:    deviceInfo{ID: "dev-1", Name: "QA Device", OS: "Windows", OSVersion: "11"},
+		UpdatedAt: 1700000000000,
+	})
+
+	// Whole pool: wrapped, provider-tagged, one record per account.
+	all := a.handleManagement(managementRequest{Method: "GET", Path: "/magic2api/accounts/export"})
+	if all.StatusCode != 200 {
+		t.Fatalf("pool export status %d: %s", all.StatusCode, all.Body)
+	}
+	if got := all.Headers.Get("Content-Disposition"); !strings.Contains(got, `filename="magic2api-accounts-`) {
+		t.Fatalf("pool export filename: %q", got)
+	}
+	var pooled struct {
+		Provider string          `json:"provider"`
+		Accounts []accountExport `json:"accounts"`
+	}
+	if err := json.Unmarshal(all.Body, &pooled); err != nil {
+		t.Fatalf("pool export is not JSON: %v", err)
+	}
+	if pooled.Provider != providerKey || len(pooled.Accounts) != 1 {
+		t.Fatalf("pool export payload: %+v", pooled)
+	}
+	record := pooled.Accounts[0]
+	if record.Authorization != "jwt-token" || record.APIKey != "mgw_abc" || record.RefreshToken != "rt_abc" {
+		t.Fatalf("tokens missing from export: %+v", record)
+	}
+	if record.Device.ID != "dev-1" || record.OrganizationCode != "h70imn51gp0f" {
+		t.Fatalf("device/organisation missing from export: %+v", record)
+	}
+
+	// Single account: a bare record that /accounts/add accepts verbatim.
+	one := a.handleManagement(managementRequest{Method: "GET", Path: "/accounts/export", Query: url.Values{"id": {"acc-1"}}})
+	if one.StatusCode != 200 {
+		t.Fatalf("single export status %d: %s", one.StatusCode, one.Body)
+	}
+	if got := one.Headers.Get("Content-Disposition"); !strings.Contains(got, "filename=") {
+		t.Fatalf("single export filename: %q", got)
+	}
+	var input accountInput
+	if err := json.Unmarshal(one.Body, &input); err != nil {
+		t.Fatalf("single export is not importable JSON: %v", err)
+	}
+	if input.Authorization != "jwt-token" || input.Device.ID != "dev-1" || input.Note != "备注" {
+		t.Fatalf("round-trip lost fields: %+v", input)
+	}
+
+	missing := a.handleManagement(managementRequest{Method: "GET", Path: "/accounts/export", Query: url.Values{"id": {"nope"}}})
+	if missing.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown id status %d: %s", missing.StatusCode, missing.Body)
 	}
 }

@@ -117,6 +117,7 @@ type accountInput struct {
 	DeviceName       string     `json:"device_name,omitempty"`
 	Priority         int        `json:"priority,omitempty"`
 	Disabled         bool       `json:"disabled,omitempty"`
+	Dead             bool       `json:"dead,omitempty"`
 	Note             string     `json:"note,omitempty"`
 	APIKey           string     `json:"api_key,omitempty"`
 	RefreshToken     string     `json:"refresh_token,omitempty"`
@@ -170,6 +171,7 @@ func accountFromInput(in accountInput, alias string) *credential {
 		Device:           device,
 		Priority:         prio,
 		Disabled:         in.Disabled,
+		Dead:             in.Dead,
 		Note:             in.Note,
 		APIKey:           strings.TrimSpace(in.APIKey),
 		RefreshToken:     strings.TrimSpace(in.RefreshToken),

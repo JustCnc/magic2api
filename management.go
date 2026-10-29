@@ -16,6 +16,7 @@ func (a *app) managementRegistration() managementRegistration {
 		{http.MethodGet, "/ui", "控制台页面"},
 		{http.MethodGet, "/overview", "概览"},
 		{http.MethodGet, "/accounts", "账号列表"},
+		{http.MethodGet, "/accounts/export", "导出账号"},
 		{http.MethodPost, "/accounts/add", "添加账号"},
 		{http.MethodPost, "/accounts/delete", "删除账号"},
 		{http.MethodPost, "/accounts/update", "更新账号"},
@@ -113,6 +114,8 @@ func (a *app) handleManagement(req managementRequest) managementResponse {
 		return okResponse(a.overview())
 	case method == http.MethodGet && path == "/accounts":
 		return okResponse(a.listAccounts())
+	case method == http.MethodGet && path == "/accounts/export":
+		return a.exportAccounts(req)
 	case method == http.MethodPost && path == "/accounts/add":
 		return a.managementAddAccount(req)
 	case method == http.MethodPost && path == "/accounts/delete":
@@ -435,6 +438,104 @@ func (a *app) accountView(c *credential) accountView {
 		}
 	}
 	return accountView{ID: c.ID, Alias: c.Alias}
+}
+
+// accountExport is the portable credential record: everything needed to rebuild
+// the account on another install. Tokens are included because this endpoint sits
+// behind the host's management key.
+type accountExport struct {
+	Type             string     `json:"type"`
+	Provider         string     `json:"provider"`
+	ID               string     `json:"id"`
+	Alias            string     `json:"alias"`
+	Authorization    string     `json:"authorization"`
+	OrganizationCode string     `json:"organization_code"`
+	Device           deviceInfo `json:"device"`
+	APIKey           string     `json:"api_key,omitempty"`
+	RefreshToken     string     `json:"refresh_token,omitempty"`
+	APIKeyExpiresAt  int64      `json:"api_key_expires_at,omitempty"`
+	RefreshExpiresAt int64      `json:"refresh_token_expires_at,omitempty"`
+	Priority         int        `json:"priority"`
+	Disabled         bool       `json:"disabled,omitempty"`
+	Dead             bool       `json:"dead,omitempty"`
+	Source           string     `json:"source,omitempty"`
+	Note             string     `json:"note,omitempty"`
+	Nickname         string     `json:"nickname,omitempty"`
+	Phone            string     `json:"phone,omitempty"`
+	UserID           string     `json:"user_id,omitempty"`
+	UpdatedAt        int64      `json:"updated_at,omitempty"`
+}
+
+func exportRecord(c *credential) accountExport {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return accountExport{
+		Type:             providerKey,
+		Provider:         providerKey,
+		ID:               c.ID,
+		Alias:            c.Alias,
+		Authorization:    c.Authorization,
+		OrganizationCode: c.OrganizationCode,
+		Device:           c.Device,
+		APIKey:           c.APIKey,
+		RefreshToken:     c.RefreshToken,
+		APIKeyExpiresAt:  c.APIKeyExpiresAt,
+		RefreshExpiresAt: c.RefreshTokenExpiresAt,
+		Priority:         c.Priority,
+		Disabled:         c.Disabled,
+		Dead:             c.Dead,
+		Source:           c.Source,
+		Note:             c.Note,
+		Nickname:         c.Nickname,
+		Phone:            c.Phone,
+		UserID:           c.UserID,
+		UpdatedAt:        c.UpdatedAt,
+	}
+}
+
+// exportAccounts downloads one account (id) or the whole pool. A single record is
+// returned bare so it can be posted straight back to /accounts/add; a pool export
+// is wrapped as {"provider": ..., "accounts": [...]}.
+func (a *app) exportAccounts(req managementRequest) managementResponse {
+	id := strings.TrimSpace(req.Query.Get("id"))
+	filename := "magic2api-accounts-" + time.Now().Format("20060102-1504") + ".json"
+	var body any
+	if id != "" {
+		account := a.pool.get(id)
+		if account == nil {
+			return failResponse(http.StatusNotFound, "账号不存在："+id)
+		}
+		record := exportRecord(account)
+		body = record
+		filename = sanitizeAlias(record.Alias) + ".json"
+		if filename == ".json" {
+			filename = record.ID + ".json"
+		}
+	} else {
+		accounts := a.pool.snapshot()
+		records := make([]accountExport, 0, len(accounts))
+		for _, account := range accounts {
+			records = append(records, exportRecord(account))
+		}
+		body = map[string]any{
+			"provider":    providerKey,
+			"exported_at": time.Now().UTC().Format(time.RFC3339),
+			"accounts":    records,
+		}
+	}
+	raw, err := json.MarshalIndent(body, "", "  ")
+	if err != nil {
+		return failResponse(http.StatusInternalServerError, "导出失败："+err.Error())
+	}
+	return managementResponse{
+		StatusCode: http.StatusOK,
+		Headers: http.Header{
+			"Content-Type":        []string{"application/json; charset=utf-8"},
+			"Content-Disposition": []string{`attachment; filename="` + filename + `"`},
+			"Cache-Control":       []string{"no-store"},
+		},
+		Body: append(raw, '\n'),
+	}
 }
 
 func (a *app) managementDeleteAccount(req managementRequest) managementResponse {

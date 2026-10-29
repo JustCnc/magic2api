@@ -89,7 +89,20 @@
 - **设置**：rpm、burst、冷却、超时、换号次数、代理、积分回填、自动领积分、调试日志
 - **测试对话**：选模型直接打一发，显示账号、耗时、usage 与正文
 
-所有列表容器固定最大高度并独立滚动。管理接口失败会在右下角 toast，不会静默。
+页面只有浅色主题（`color-scheme: light`，不跟随系统深色），表格容器固定最大高度并独立滚动。
+管理接口失败会在右下角 toast，不会静默。
+
+### 导出账号
+
+「账号」页每个账号有 **导出** 按钮，右上角有 **导出全部**：
+
+- 单账号 → `<alias>.json`，就是一条可回灌的记录（`authorization` / `organization_code` /
+  `device` / `api_key` / `refresh_token` / 有效期 / 优先级 / 备注）
+- 整池 → `magic2api-accounts-YYYYMMDD-HHMM.json`，形如
+  `{"provider":"magic2api","exported_at":"...","accounts":[...]}`
+- 文件含明文 token，只应该放在可信位置；接口本身在宿主管理密钥之后
+- 回灌：把单账号文件的 JSON 粘到「已有登录态」框里点导入，或
+  `curl -X POST .../accounts/add -d @live.json`
 
 ## 管理接口
 
@@ -100,6 +113,7 @@
 | GET | `/ui` | 控制台页面 |
 | GET | `/overview` | 概览数据 |
 | GET | `/accounts` | 账号列表 |
+| GET | `/accounts/export` | 导出账号：`?id=<账号 id>` 导出单个，不带参数导出整池（`Content-Disposition: attachment`） |
 | POST | `/accounts/add` | 添加账号（`{authorization, organization_code?, alias?, priority?}`） |
 | POST | `/accounts/delete` | 删除账号（`{id}`） |
 | POST | `/accounts/update` | 改优先级/启停/复活/备注（`{id, priority?, disabled?, dead?, note?}`） |
