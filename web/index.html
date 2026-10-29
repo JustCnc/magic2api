@@ -331,10 +331,11 @@
       </div>
       <div class="row" style="margin-top:12px">
         <label style="flex:0 0 auto"><span>积分回填</span><input id="set-points" type="checkbox" style="width:auto" /></label>
-        <label style="flex:0 0 auto"><span>自动领积分</span><input id="set-daily" type="checkbox" style="width:auto" /></label>
-        <label style="flex:0 0 160px"><span>每天领取时间</span><input id="set-schedule" placeholder="09:05" /></label>
         <label style="flex:0 0 auto"><span>调试日志</span><input id="set-debug" type="checkbox" style="width:auto" /></label>
         <button class="act" id="btn-save-settings">保存</button>
+      </div>
+      <div class="sub" style="margin-top:10px">
+        「自动领积分」和每天执行时间在 <b>积分 → 定时领取</b> 里设置，这里只管请求与限流参数。
       </div>
       <pre id="settings-json" style="margin-top:12px"></pre>
     </div>
@@ -1317,8 +1318,6 @@ async function loadSettings() {
   document.getElementById("set-attempts").value = cfg.max_attempts;
   document.getElementById("set-proxy").value = cfg.proxy_url || "";
   document.getElementById("set-points").checked = !!cfg.points_logging;
-  document.getElementById("set-daily").checked = !!cfg.daily_points_enabled;
-  document.getElementById("set-schedule").value = cfg.points_schedule_time || "09:05";
   document.getElementById("set-debug").checked = !!cfg.debug_dump;
   document.getElementById("settings-json").textContent = JSON.stringify(cfg, null, 2);
 }
@@ -1333,8 +1332,6 @@ document.getElementById("btn-save-settings").addEventListener("click", async eve
       max_attempts: Number(document.getElementById("set-attempts").value),
       proxy_url: document.getElementById("set-proxy").value.trim(),
       points_logging: document.getElementById("set-points").checked,
-      daily_points_enabled: document.getElementById("set-daily").checked,
-      points_schedule_time: document.getElementById("set-schedule").value.trim(),
       debug_dump: document.getElementById("set-debug").checked,
     };
     const cfg = await api("/settings", { method: "POST", body: JSON.stringify(patch) });
