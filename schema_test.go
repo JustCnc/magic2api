@@ -5,11 +5,14 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"math/big"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -734,6 +737,7 @@ func newTestApp() *app {
 		log:       newLogRing(50),
 		published: map[string]string{},
 		requests:  newRequestLog(20),
+		metrics:   &metrics{},
 	}
 	a.accounts = newAccountManager(a)
 	return a
@@ -1220,5 +1224,204 @@ func TestPointsCacheSurvivesRestart(t *testing.T) {
 	// The router is warm immediately: no refresh sweep needed for the score.
 	if score := b.expiryOf("acc"); score.Soon != 420 || score.Earliest.IsZero() {
 		t.Fatalf("expiry score not seeded: %+v", score)
+	}
+}
+
+func TestBusinessErrorBodyRotatesInsteadOfLeaking(t *testing.T) {
+	// The gateway answers a dead api key with HTTP 200 and this body on a
+	// streaming request; treating it as an answer leaks it to the client.
+	payload := []byte(`{"code":403,"message":"token无效","data":{},"error":[]}`)
+	f := businessErrorBody(payload)
+	if f == nil {
+		t.Fatal("business error envelope not detected")
+	}
+	if !f.Auth {
+		t.Fatalf("code 403 must count as an auth failure: %+v", f)
+	}
+	if !f.Retryable {
+		t.Fatalf("a rejected key must be retryable on another account: %+v", f)
+	}
+	if f.Message != "gateway: token无效" {
+		t.Fatalf("message = %q", f.Message)
+	}
+	// A real completion must never be mistaken for an error.
+	if businessErrorBody([]byte(`{"id":"x","choices":[{"index":0}]}`)) != nil {
+		t.Fatal("a completion with choices was classified as an error")
+	}
+	if businessErrorBody([]byte(`{"code":1000,"data":{}}`)) != nil {
+		t.Fatal("success code 1000 was classified as an error")
+	}
+}
+
+func TestBufferNonSSELeavesSSEAlone(t *testing.T) {
+	sse := &http.Response{
+		Header: http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:   io.NopCloser(strings.NewReader("data: {}\n\n")),
+	}
+	if got := bufferNonSSE(sse, 1024); got != nil {
+		t.Fatalf("SSE body was buffered: %q", got)
+	}
+	rest, _ := io.ReadAll(sse.Body)
+	if string(rest) != "data: {}\n\n" {
+		t.Fatalf("SSE body was consumed: %q", rest)
+	}
+
+	jsonResp := &http.Response{
+		Header: http.Header{"Content-Type": []string{"application/json"}},
+		Body:   io.NopCloser(strings.NewReader(`{"code":403,"message":"token无效"}`)),
+	}
+	body := bufferNonSSE(jsonResp, 1024)
+	if len(body) == 0 {
+		t.Fatal("JSON body was not buffered")
+	}
+	// The replay must still see the full body.
+	rest, _ = io.ReadAll(jsonResp.Body)
+	if string(rest) != string(body) {
+		t.Fatalf("body not restored: %q", rest)
+	}
+}
+
+func TestEnsureAPIKeyRetriesRefreshAfterNetworkError(t *testing.T) {
+	var refreshes atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			if refreshes.Add(1) == 1 {
+				// Simulate a connection that dies after the request was read: the
+				// pair may already be rotated upstream.
+				hj, ok := w.(http.Hijacker)
+				if !ok {
+					t.Fatal("server cannot hijack")
+				}
+				conn, _, _ := hj.Hijack()
+				conn.Close()
+				return
+			}
+			_, _ = w.Write([]byte(`{"code":1000,"data":{"api_key":"mgw_fresh","refresh_token":"rt2","api_key_expires_at":"2099-01-01 00:00:00","refresh_token_expires_at":"2099-01-01 00:00:00"}}`))
+		case http.MethodPost:
+			_, _ = w.Write([]byte(`{"code":1000,"data":{"api_key":"mgw_minted"}}`))
+		}
+	}))
+	defer server.Close()
+
+	a := newTestApp()
+	a.cfg = Config{BaseURL: server.URL, RequestTimeoutSeconds: 10}
+	a.up = newUpstream(a.cfg)
+
+	c := &credential{
+		ID:                    "acct",
+		Authorization:         "jwt",
+		OrganizationCode:      "org",
+		APIKey:                "mgw_stale",
+		RefreshToken:          "rt1",
+		RefreshTokenExpiresAt: time.Now().Add(24 * time.Hour).UnixMilli(),
+	}
+	key, err := a.accounts.ensureAPIKey(context.Background(), c)
+	if err != nil {
+		t.Fatalf("refresh should have recovered: %v", err)
+	}
+	if key != "mgw_fresh" {
+		t.Fatalf("key = %q, want the retried refresh result", key)
+	}
+	if refreshes.Load() != 2 {
+		t.Fatalf("refresh attempts = %d, want 2", refreshes.Load())
+	}
+}
+
+func TestEnsureAPIKeyInvalidatesPoisonedKey(t *testing.T) {
+	// Every refresh dies; the stale api key must not survive, because the
+	// gateway may have rotated it before the response was lost.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut {
+			hj, _ := w.(http.Hijacker)
+			conn, _, _ := hj.Hijack()
+			conn.Close()
+			return
+		}
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	a := newTestApp()
+	a.cfg = Config{BaseURL: server.URL, RequestTimeoutSeconds: 5}
+	a.up = newUpstream(a.cfg)
+
+	c := &credential{
+		ID:                    "acct",
+		Authorization:         "jwt",
+		OrganizationCode:      "org",
+		APIKey:                "mgw_stale",
+		APIKeyExpiresAt:       time.Now().Add(time.Minute).UnixMilli(),
+		RefreshToken:          "rt1",
+		RefreshTokenExpiresAt: time.Now().Add(24 * time.Hour).UnixMilli(),
+	}
+	if _, err := a.accounts.ensureAPIKey(context.Background(), c); err == nil {
+		t.Fatal("expected the refresh and mint to fail")
+	}
+	c.mu.Lock()
+	key := c.APIKey
+	c.mu.Unlock()
+	if key != "" {
+		t.Fatalf("poisoned key survived: %q", key)
+	}
+}
+
+func TestOpenStreamRotatesOnBusinessAuthError(t *testing.T) {
+	// The bug this covers: the gateway answers HTTP 200 + {"code":403,...} for a
+	// dead api key on a streaming request. The old code returned that as a
+	// successful stream and the client got "无法解析的响应体" instead.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/model-gateway/tokens":
+			_, _ = w.Write([]byte(`{"code":1000,"data":{"api_key":"mgw_good","refresh_token":"rt2","api_key_expires_at":"2099-01-01 00:00:00","refresh_token_expires_at":"2099-01-01 00:00:00"}}`))
+		case r.URL.Path == "/v1/chat/completions":
+			if r.Header.Get("api-key") != "mgw_good" {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"code":403,"message":"token无效","data":{},"error":[]}`))
+				return
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n"))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	a := newTestApp()
+	a.cfg = Config{BaseURL: server.URL, RequestTimeoutSeconds: 10, MaxAttempts: 1}
+	a.up = newUpstream(a.cfg)
+
+	account := &credential{
+		ID:                    "acct",
+		Alias:                 "acct",
+		Authorization:         "jwt",
+		OrganizationCode:      "org",
+		APIKey:                "mgw_stale",
+		APIKeyExpiresAt:       time.Now().Add(time.Hour).UnixMilli(),
+		RefreshToken:          "rt1",
+		RefreshTokenExpiresAt: time.Now().Add(24 * time.Hour).UnixMilli(),
+	}
+	a.pool.put(account)
+
+	resp, used, f := a.openStream(context.Background(), a.cfg, []byte(`{"model":"m"}`), "")
+	if f != nil {
+		t.Fatalf("stream should have rotated to a fresh key: %+v", f)
+	}
+	defer resp.Body.Close()
+	if used == nil || used.ID != "acct" {
+		t.Fatalf("used = %+v", used)
+	}
+	if got := resp.Header.Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
+		t.Fatalf("content-type = %q, want the rotated SSE answer", got)
+	}
+	if a.metrics.authRetry.Load() == 0 {
+		t.Fatal("auth retry was not counted")
+	}
+	account.mu.Lock()
+	key := account.APIKey
+	account.mu.Unlock()
+	if key != "mgw_good" {
+		t.Fatalf("api key = %q, want the refreshed one", key)
 	}
 }

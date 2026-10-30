@@ -302,6 +302,37 @@ func (a *app) openStream(ctx context.Context, cfg Config, body []byte, preferred
 				break
 			}
 			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+				// The gateway reports a rejected api key with HTTP 200 and a body of
+				// {"code":403,"message":"token无效"}. Returning that as success sends
+				// the client an unparsable answer instead of rotating the account.
+				if body2 := bufferNonSSE(resp, 64<<20); len(body2) > 0 {
+					if f := gatewayAuthFailure(http.StatusOK, resp.Header, body2); f != nil {
+						a.accounts.invalidate(account)
+						if retry == 0 {
+							if refreshed, errRefresh := a.accounts.ensureAPIKey(ctx, account); errRefresh == nil {
+								apiKey = refreshed
+								a.metrics.authRetry.Add(1)
+								continue
+							}
+						}
+						a.accounts.markFailure(account, f)
+						lastFailure = f
+						break
+					}
+					if f := businessErrorBody(body2); f != nil {
+						// Any other business error behind HTTP 200: let the caller rotate
+						// instead of forwarding rubbish downstream.
+						a.accounts.markFailure(account, f)
+						lastFailure = f
+						if f.Dead {
+							break
+						}
+						if retry == 0 && f.Retryable {
+							continue
+						}
+						break
+					}
+				}
 				a.accounts.markSuccess(account)
 				return resp, account, nil
 			}
@@ -366,6 +397,55 @@ func (a *app) chatWithRetry(ctx context.Context, account *credential, apiKey str
 		return chatResult{}, f
 	}
 	return chatResult{}, &failure{Status: http.StatusBadGateway, Message: "上游连续返回无法解析的响应", Retryable: true}
+}
+
+// bufferNonSSE reads a JSON answer so the caller can inspect it, then puts it
+// back so the streaming path still works. SSE answers are left untouched.
+func bufferNonSSE(resp *http.Response, limit int64) []byte {
+	if resp == nil || resp.Body == nil {
+		return nil
+	}
+	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		return nil
+	}
+	payload, _ := readAllLimited(resp.Body, limit)
+	resp.Body.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(payload))
+	trimmed := bytes.TrimSpace(payload)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return nil
+	}
+	return payload
+}
+
+// businessErrorBody recognises an asset-style envelope delivered as a chat
+// answer: HTTP 200 with {"code":N,"message":...} and no choices.
+func businessErrorBody(payload []byte) *failure {
+	trimmed := strings.TrimSpace(string(payload))
+	if !strings.HasPrefix(trimmed, "{") || strings.Contains(trimmed, `"choices"`) {
+		return nil
+	}
+	var probe struct {
+		Code    flexInt `json:"code"`
+		Message string  `json:"message"`
+	}
+	if json.Unmarshal(payload, &probe) != nil {
+		return nil
+	}
+	code := probe.Code.Int64()
+	if code == 0 || code == apiSuccessCode {
+		return nil
+	}
+	message := probe.Message
+	if message == "" {
+		message = fmt.Sprintf("上游业务错误 code=%d", code)
+	}
+	return &failure{
+		Status:    http.StatusBadGateway,
+		Message:   "gateway: " + message,
+		Retryable: code != 2152 && code != 2155,
+		Auth:      code == 403 || code == 2179 || code == 3103,
+	}
 }
 
 func isNonJSONFailure(f *failure) bool {

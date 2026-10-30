@@ -512,6 +512,30 @@ func usableLocked(c *credential) bool {
 	return true
 }
 
+const (
+	// tokenRefreshAttempts bounds one refresh cycle. The gateway rotates the pair
+	// on every successful call, so a lost response leaves us holding a dead key;
+	// a couple of quick retries recover far more often than waiting for the next
+	// maintenance tick 30s later.
+	tokenRefreshAttempts = 3
+	tokenRefreshBackoff  = time.Second
+)
+
+// sleepContext waits for d, reporting false when the context ended first.
+func sleepContext(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return true
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
 // accountManager owns token rotation and health state.
 type accountManager struct {
 	app *app
@@ -573,15 +597,27 @@ func (m *accountManager) ensureAPIKey(ctx context.Context, c *credential) (strin
 
 	// Prefer a refresh: it keeps the same refresh chain and costs one call.
 	if c.RefreshToken != "" && time.Now().UnixMilli() < c.RefreshTokenExpiresAt {
-		tok, err := up.refreshGatewayToken(ctx, c.Authorization, c.OrganizationCode, c.RefreshToken)
-		if err == nil {
-			m.applyToken(c, tok)
-			m.app.log.info("token", fmt.Sprintf("账号 %s 刷新模型网关令牌成功", c.label()))
-			return c.APIKey, nil
-		}
-		if f := asFailure(err); f.Auth || !f.Retryable {
-			// A rejected refresh token must not block a fresh mint.
-			m.app.log.warn("token", fmt.Sprintf("账号 %s 刷新失败（%s），改为重新铸造", c.label(), f.Message))
+		for attempt := 0; attempt < tokenRefreshAttempts; attempt++ {
+			tok, err := up.refreshGatewayToken(ctx, c.Authorization, c.OrganizationCode, c.RefreshToken)
+			if err == nil {
+				m.applyToken(c, tok)
+				m.app.log.info("token", fmt.Sprintf("账号 %s 刷新模型网关令牌成功", c.label()))
+				return c.APIKey, nil
+			}
+			f := asFailure(err)
+			if f.Auth || !f.Retryable {
+				// A rejected refresh token must not block a fresh mint.
+				m.app.log.warn("token", fmt.Sprintf("账号 %s 刷新失败（%s），改为重新铸造", c.label(), f.Message))
+				break
+			}
+			// The request may have reached the gateway before the connection died,
+			// and a successful refresh invalidates the old pair immediately. Never
+			// send that api key again: drop it so nothing can ride on it.
+			m.invalidate(c)
+			m.app.log.warn("token", fmt.Sprintf("账号 %s 令牌续期失败（%s），丢弃旧令牌后重试", c.label(), f.Message))
+			if attempt+1 >= tokenRefreshAttempts || !sleepContext(ctx, time.Duration(attempt+1)*tokenRefreshBackoff) {
+				break
+			}
 		}
 	}
 	tok, err := up.mintGatewayToken(ctx, c.Authorization, c.OrganizationCode)

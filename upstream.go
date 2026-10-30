@@ -53,6 +53,11 @@ func asFailure(err error) *failure {
 type upstream struct {
 	cfg    Config
 	client *http.Client
+	// asset talks to /api/v1/*. It keeps its own connection pool: the gateway
+	// endpoints rotate tokens on every call, and a half-closed keep-alive
+	// connection there costs a whole refresh cycle (see the EOF notes in
+	// accounts.go).
+	asset *http.Client
 	// stream has no whole-request timeout: a long answer must not be cut in the
 	// middle. Liveness comes from the idle watchdog in executor.go.
 	stream *http.Client
@@ -69,9 +74,15 @@ func newUpstream(cfg Config) *upstream {
 		ExpectContinueTimeout: 5 * time.Second,
 		ForceAttemptHTTP2:     true,
 	}
+	assetTransport := transport.Clone()
+	// Upstream and the middleboxes in front of it drop idle connections well
+	// before 90s; reusing one surfaces as "EOF" on a token refresh. Recycle early.
+	assetTransport.IdleConnTimeout = 20 * time.Second
+	assetTransport.MaxIdleConnsPerHost = 4
 	if cfg.ProxyURL != "" {
 		if proxy, err := url.Parse(cfg.ProxyURL); err == nil {
 			transport.Proxy = http.ProxyURL(proxy)
+			assetTransport.Proxy = http.ProxyURL(proxy)
 		}
 	}
 	checkRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
@@ -79,6 +90,11 @@ func newUpstream(cfg Config) *upstream {
 		cfg: cfg,
 		client: &http.Client{
 			Transport:     transport,
+			Timeout:       time.Duration(cfg.requestTimeout()) * time.Second,
+			CheckRedirect: checkRedirect,
+		},
+		asset: &http.Client{
+			Transport:     assetTransport,
 			Timeout:       time.Duration(cfg.requestTimeout()) * time.Second,
 			CheckRedirect: checkRedirect,
 		},
@@ -94,13 +110,22 @@ func (u *upstream) close() {
 	if u == nil || u.client == nil {
 		return
 	}
-	if tr, ok := u.client.Transport.(*http.Transport); ok {
-		tr.CloseIdleConnections()
+	for _, client := range []*http.Client{u.client, u.asset} {
+		if client == nil {
+			continue
+		}
+		if tr, ok := client.Transport.(*http.Transport); ok {
+			tr.CloseIdleConnections()
+		}
 	}
 }
 
 // call performs one request and returns status, content type and body.
 func (u *upstream) call(ctx context.Context, method, target string, headers map[string]string, body []byte) (int, http.Header, []byte, error) {
+	return doCall(ctx, u.client, method, target, headers, body)
+}
+
+func doCall(ctx context.Context, client *http.Client, method, target string, headers map[string]string, body []byte) (int, http.Header, []byte, error) {
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)
@@ -115,7 +140,7 @@ func (u *upstream) call(ctx context.Context, method, target string, headers map[
 	if req.Header.Get("User-Agent") == "" {
 		req.Header.Set("User-Agent", defaultUserAgent)
 	}
-	resp, err := u.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return 0, nil, nil, err
 	}
@@ -155,7 +180,7 @@ func (u *upstream) gatewayHeaders(apiKey string) map[string]string {
 
 // callAsset performs an asset/account call and unwraps the envelope.
 func (u *upstream) callAsset(ctx context.Context, method, path, token, org string, body []byte) (json.RawMessage, error) {
-	status, header, payload, err := u.call(ctx, method, u.cfg.BaseURL+path, u.assetHeaders(token, org, ""), body)
+	status, header, payload, err := doCall(ctx, u.asset, method, u.cfg.BaseURL+path, u.assetHeaders(token, org, ""), body)
 	if err != nil {
 		return nil, &failure{Status: http.StatusBadGateway, Message: fmt.Sprintf("%s %s: %v", method, path, err), Retryable: true}
 	}
